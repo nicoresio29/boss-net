@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>boss.net · Chat</title>
+  <meta name="theme-color" content="#0b0b14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="boss.net">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <!-- ===== Login ===== -->
+  <div id="loginScreen" class="lg-screen oculto">
+    <div class="lg-wrap">
+      <div class="lg-brand">
+        <img src="/favicon.svg?v=2" alt="boss.net" class="logo-img">
+        <span>boss.net</span>
+      </div>
+
+      <div class="lg-card">
+        <div class="lg-tabs">
+          <button type="button" id="tabEntrar" class="lg-tab activo">Entrar</button>
+          <button type="button" id="tabCrear" class="lg-tab">Crear cuenta</button>
+        </div>
+
+        <h2 id="lgTitulo">Bienvenido de nuevo</h2>
+        <p class="lg-sub" id="lgSub">Entrá para ver tu agenda y tu agente.</p>
+
+        <form id="loginForm" class="lg-form">
+          <div class="lg-field">
+            <span class="lg-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+            </span>
+            <input id="email" type="email" placeholder="Correo electrónico" autocomplete="email" required>
+          </div>
+
+          <div class="lg-field">
+            <span class="lg-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            </span>
+            <input id="password" type="password" placeholder="Contraseña (mín. 6 caracteres)" minlength="6" autocomplete="current-password" required>
+            <button type="button" id="verPass" class="lg-eye">Ver</button>
+          </div>
+
+          <div class="lg-row" id="filaExtra">
+            <label class="lg-check">
+              <input type="checkbox" id="recordarme"> Recordarme
+            </label>
+            <button type="button" id="olvide" class="lg-link">¿Olvidaste la contraseña?</button>
+          </div>
+
+          <button type="submit" id="loginBtn" class="lg-primary">Entrar</button>
+        </form>
+
+        <p id="loginMsg" class="lg-msg"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Clave de Groq ===== -->
+  <div id="keyScreen" class="lg-screen oculto">
+    <div class="lg-wrap">
+      <div class="lg-brand">
+        <img src="/favicon.svg?v=2" alt="boss.net" class="logo-img">
+        <span>Conectá tu agente</span>
+      </div>
+
+      <div class="lg-card">
+        <h2>Pegá tu API key de Groq</h2>
+        <p class="lg-sub">Es gratis y la usás vos. Se guarda solo en este navegador.</p>
+
+        <ol class="pasos">
+          <li>
+            <span>1</span>
+            <div><strong>Entrá a Groq</strong><br>
+              <a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a>
+            </div>
+          </li>
+          <li>
+            <span>2</span>
+            <div><strong>Creá tu cuenta</strong> con mail o Google. No pide tarjeta.</div>
+          </li>
+          <li>
+            <span>3</span>
+            <div><strong>Abrí API Keys</strong> y tocá <em>Create API Key</em>.<br>
+              <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Ir a API Keys</a>
+            </div>
+          </li>
+          <li>
+            <span>4</span>
+            <div><strong>Copiala.</strong> Empieza con <code>gsk_</code> y Groq la muestra una sola vez.</div>
+          </li>
+          <li>
+            <span>5</span>
+            <div><strong>Pegala abajo</strong> y tocá Guardar.</div>
+          </li>
+        </ol>
+
+        <input id="groqKeyInput" type="password" placeholder="gsk_..." autocomplete="off" spellcheck="false">
+        <button id="guardarClave" type="button" class="lg-primary">Guardar y empezar</button>
+        <button id="cancelarClave" type="button" class="lg-link">Cancelar</button>
+        <p id="keyMsg" class="lg-msg"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Perfil ===== -->
+  <div id="perfilScreen" class="lg-screen oculto">
+    <div class="lg-wrap">
+      <div class="lg-brand">
+        <img src="/favicon.svg?v=2" alt="boss.net" class="logo-img">
+        <span>Configurá tu perfil</span>
+      </div>
+
+      <div class="lg-card">
+        <h2>¿Cómo te llamás?</h2>
+        <p class="lg-sub">Esto lo vas a ver vos y lo va a usar el agente para hablarte.</p>
+
+        <label class="campo-label">Tu nombre</label>
+        <input id="perfilNombre" type="text" maxlength="30" placeholder="Tu nombre" autocomplete="off">
+
+        <label class="campo-label">Elegí tu avatar</label>
+        <div id="avatarGrid" class="avatar-grid"></div>
+
+        <label class="campo-label">Cómo se llama el agente</label>
+        <input id="perfilAgente" type="text" maxlength="30" placeholder="Nombre del agente" autocomplete="off">
+
+        <label class="campo-label">Tono de voz</label>
+        <div id="tonoGrid" class="tono-grid"></div>
+
+        <button id="guardarPerfil" type="button" class="lg-primary">Guardar y empezar</button>
+        <p id="perfilMsg" class="lg-msg"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Aplicación ===== -->
+  <div class="app">
+
+    <!-- Barra lateral -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sb-brand">
+        <img src="/favicon.svg?v=2" alt="boss.net" class="logo-img">
+        <span>boss.net</span>
+      </div>
+
+      <div class="sb-top">
+        <button id="btnNuevo" type="button" class="sb-item primario">+ Nuevo chat</button>
+        <button type="button" class="sb-item" title="Próximamente">Buscar</button>
+        <button id="btnPersonalizar" type="button" class="sb-item">Personalización</button>
+      </div>
+
+      <div class="sb-section">
+        <p class="sb-title">Proyectos</p>
+        <ul id="listaProyectos" class="sb-lista"></ul>
+      </div>
+
+      <div class="sb-section">
+        <p class="sb-title">Chats</p>
+        <ul id="listaChats" class="sb-lista"></ul>
+      </div>
+
+      <div class="sb-section">
+        <p class="sb-title">Tareas</p>
+        <ul id="listaTareas" class="sb-lista"></ul>
+      </div>
+
+      <div class="sb-bottom">
+        <div class="cuenta-wrap">
+          <button id="btnCuenta" type="button" class="sb-item cuenta-btn" title="Cambiar de cuenta">
+            <span class="cuenta-avatar" id="cuentaAvatar">?</span>
+            <span class="cuenta-mail" id="cuentaMail">Sin sesión</span>
+          </button>
+          <ul id="menuCuenta" class="menu-cuenta oculto"></ul>
+        </div>
+        <button id="cambiarClave" type="button" class="sb-item">API key de Groq</button>
+        <button id="cerrarSesion" type="button" class="sb-item">Salir</button>
+      </div>
+    </aside>
+
+    <!-- Centro: chat -->
+    <main class="centro">
+      <div class="topbar">
+        <button id="menuBtn" type="button" class="icon-btn">☰</button>
+        <span class="topbar-titulo">boss.net</span>
+        <button id="panelBtn" type="button" class="icon-btn">Panel</button>
+      </div>
+
+      <div id="avisos"></div>
+
+      <section id="messages">
+        <div class="inner" id="chat"></div>
+      </section>
+
+      <footer class="composer">
+        <form id="form">
+          <textarea id="input" rows="1" placeholder="Escribí tu mensaje..."></textarea>
+          <button id="send" type="submit">Enviar</button>
+        </form>
+        <p class="hint">Enter para enviar · Shift + Enter para un salto de línea</p>
+      </footer>
+    </main>
+
+    <!-- Panel derecho: Studio y Work -->
+    <aside class="panel" id="panel">
+      <div class="panel-tabs">
+        <button type="button" class="ptab activo" data-area="studio">Studio</button>
+        <button type="button" class="ptab" data-area="work">Work</button>
+      </div>
+
+      <div class="panel-body">
+        <div id="areaStudio" class="grid-mosaicos">
+          <button type="button" class="mosaico" data-mosaico="vista">Vista previa del proyecto</button>
+          <button type="button" class="mosaico" data-mosaico="terminal">Terminal</button>
+          <button type="button" class="mosaico" data-mosaico="docs">Documentación</button>
+        </div>
+
+        <div id="areaWork" class="grid-mosaicos oculto">
+          <button type="button" class="mosaico" data-mosaico="tareas">Panel de tareas pendientes</button>
+          <button type="button" class="mosaico" data-mosaico="calendario">Calendario</button>
+          <button type="button" class="mosaico" data-mosaico="incidencias">Resumen de incidencias</button>
+          <button type="button" class="mosaico" data-mosaico="atajos">Atajos a recursos</button>
+        </div>
+
+        <section id="detalle" class="pcard oculto">
+          <div class="detalle-head">
+            <h3 id="detalleTitulo"></h3>
+            <button type="button" id="detalleCerrar" class="lg-link">Cerrar</button>
+          </div>
+          <div id="detalleBody"></div>
+        </section>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- ===== Librerías ===== -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+
+  <!-- ===== Lógica ===== -->
+  <script src="/app.js"></script>
+</body>
+</html>

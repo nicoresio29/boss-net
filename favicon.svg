@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Fondo con degradado -->
+  <rect width="512" height="512" rx="120" fill="url(#fondo)"/>
+
+  <!-- Dibujo centrado -->
+  <g transform="translate(0, 30)">
+    <!-- Antena -->
+    <line x1="256" y1="110" x2="256" y2="150" stroke="#ffffff" stroke-width="22" stroke-linecap="round"/>
+
+    <!-- Orejas -->
+    <line x1="92" y1="235" x2="92" y2="300" stroke="#ffffff" stroke-width="22" stroke-linecap="round"/>
+    <line x1="420" y1="235" x2="420" y2="300" stroke="#ffffff" stroke-width="22" stroke-linecap="round"/>
+
+    <!-- Cabeza con burbuja -->
+    <path d="M150 170
+             H362
+             Q392 170 392 200
+             V320
+             Q392 350 362 350
+             H294
+             L256 400
+             L218 350
+             H150
+             Q120 350 120 320
+             V200
+             Q120 170 150 170 Z"
+          fill="#1b1340" stroke="#ffffff" stroke-width="22" stroke-linejoin="round"/>
+
+    <!-- Visera -->
+    <line x1="120" y1="262" x2="392" y2="262" stroke="#ffffff" stroke-width="22"/>
+
+    <!-- Ojos -->
+    <circle cx="208" cy="216" r="16" fill="#22d3ee"/>
+    <circle cx="304" cy="216" r="16" fill="#22d3ee"/>
+  </g>
+</svg>

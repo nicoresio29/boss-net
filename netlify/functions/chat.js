@@ -1,0 +1,369 @@
+const TZ = "America/Argentina/Buenos_Aires";
+const SUPABASE_URL = "https://wplaadbewlbyeafohfjm.supabase.co";
+const SUPABASE_KEY = "sb_publishable_jGbMu5U9D00_Oe9ATrzvvQ_1a2kYNqj"; // publishable: segura en el servidor
+
+function hoyISO() {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(new Date());
+}
+
+function respond(statusCode, body) {
+  return { statusCode, body: JSON.stringify(body) };
+}
+
+// ---------- Supabase ----------
+async function obtenerUsuario(token) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return null;
+  const usuario = await res.json();
+  return usuario?.id ? usuario : null;
+}
+
+async function db(path, token, options = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...options,
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+  const texto = await res.text();
+  return texto ? JSON.parse(texto) : null;
+}
+
+async function cargarContexto(token, conversacionId) {
+  const [historial, memorias] = await Promise.all([
+    conversacionId
+      ? db(`messages?select=role,content&conversation_id=eq.${conversacionId}&order=created_at.desc&limit=30`, token)
+      : Promise.resolve([]),
+    db("memorias?select=id,tipo,titulo,detalle,fecha,estado&estado=eq.activo&order=created_at.desc&limit=100", token),
+  ]);
+  return { historial: historial.reverse(), memorias };
+}
+
+async function guardarMensaje(token, userId, conversacionId, role, content) {
+  try {
+    await db("messages", token, {
+      method: "POST",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ user_id: userId, conversation_id: conversacionId, role, content }),
+    });
+  } catch (err) {
+    console.log("No se pudo guardar el mensaje:", err.message);
+  }
+}
+
+async function crearConversacion(token, userId, primerMensaje) {
+  const titulo = primerMensaje.slice(0, 40).trim() || "Chat nuevo";
+  const [fila] = await db("conversations", token, {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ user_id: userId, titulo }),
+  });
+  return fila.id;
+}
+
+async function tocarConversacion(token, id) {
+  await db(`conversations?id=eq.${id}`, token, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ updated_at: new Date().toISOString() }),
+  });
+}
+
+// ---------- Herramientas ----------
+function fn(name, description, properties = {}, required = []) {
+  return {
+    type: "function",
+    function: { name, description, parameters: { type: "object", properties, required } },
+  };
+}
+
+const TOOLS = [
+  fn("recordar_dato", "Guarda un dato importante del usuario: un cliente, un contacto, una preferencia o algo que no quiere olvidar.", {
+    titulo: { type: "string" },
+    detalle: { type: "string" },
+  }, ["titulo"]),
+  fn("crear_proyecto", "Crea un proyecto con nombre y descripción.", {
+    titulo: { type: "string" },
+    detalle: { type: "string" },
+  }, ["titulo"]),
+  fn("agendar_evento", "Agenda un evento o compromiso con fecha (YYYY-MM-DD).", {
+    titulo: { type: "string" },
+    fecha: { type: "string", description: "YYYY-MM-DD" },
+    detalle: { type: "string" },
+  }, ["titulo", "fecha"]),
+  fn("cerrar_memoria", "Cierra un dato, proyecto o evento usando su id.", {
+    id: { type: "string" },
+  }, ["id"]),
+  fn("agregar_tarea", "Agrega una tarea a la lista de pendientes.", {
+    titulo: { type: "string" },
+    fecha: { type: "string", description: "YYYY-MM-DD, opcional" },
+    prioridad: { type: "string", enum: ["alta", "media", "baja"] },
+  }, ["titulo"]),
+  fn("completar_tarea", "Marca una tarea como hecha usando su id.", {
+    id: { type: "integer" },
+  }, ["id"]),
+  fn("ver_agenda", "Devuelve tareas pendientes y eventos de los próximos 30 días."),
+  fn("calcular", "Evalúa una operación matemática simple con números, + - * / ( ) y punto decimal.", {
+    expresion: { type: "string" },
+  }, ["expresion"]),
+];
+
+function normalizarEstado(e) {
+  return {
+    notas: Array.isArray(e?.notas) ? e.notas.slice(-100) : [],
+    tareas: Array.isArray(e?.tareas) ? e.tareas.slice(-200) : [],
+    proximoId: Number.isInteger(e?.proximoId) ? e.proximoId : 1,
+  };
+}
+
+async function ejecutarHerramienta(nombre, argsTexto, ctx) {
+  let args = {};
+  try {
+    args = JSON.parse(argsTexto || "{}");
+  } catch {
+    return { error: "Argumentos inválidos" };
+  }
+
+  const { estado, token, userId, memorias } = ctx;
+  const hoy = hoyISO();
+
+  if (nombre === "recordar_dato" || nombre === "crear_proyecto") {
+    const titulo = String(args.titulo || "").trim();
+    if (!titulo) return { error: "Falta el título" };
+    const tipo = nombre === "recordar_dato" ? "dato" : "proyecto";
+    const [fila] = await db("memorias", token, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ user_id: userId, tipo, titulo, detalle: args.detalle || null }),
+    });
+    if (tipo === "dato") estado.notas.push({ texto: titulo, fecha: hoy });
+    return { ok: true, id: fila.id, mensaje: `${tipo} guardado` };
+  }
+
+  if (nombre === "agendar_evento") {
+    const titulo = String(args.titulo || "").trim();
+    if (!titulo) return { error: "Falta el título" };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.fecha || "")) return { error: "La fecha tiene que ser YYYY-MM-DD" };
+    const [fila] = await db("memorias", token, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ user_id: userId, tipo: "evento", titulo, fecha: args.fecha, detalle: args.detalle || null }),
+    });
+    return { ok: true, id: fila.id, mensaje: "Evento agendado" };
+  }
+
+  if (nombre === "cerrar_memoria") {
+    const id = String(args.id || "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: "Id inválido" };
+    await db(`memorias?id=eq.${id}`, token, {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ estado: "cerrado" }),
+    });
+    return { ok: true, mensaje: "Cerrado" };
+  }
+
+  if (nombre === "agregar_tarea") {
+    const titulo = String(args.titulo || "").trim();
+    if (!titulo) return { error: "Falta el título" };
+    const fecha = /^\d{4}-\d{2}-\d{2}$/.test(args.fecha || "") ? args.fecha : null;
+    const prioridad = ["alta", "media", "baja"].includes(args.prioridad) ? args.prioridad : "media";
+    const tarea = { id: estado.proximoId++, titulo, fecha, prioridad, hecha: false };
+    estado.tareas.push(tarea);
+    return { ok: true, tarea };
+  }
+
+  if (nombre === "completar_tarea") {
+    const tarea = estado.tareas.find((t) => t.id === Number(args.id));
+    if (!tarea) return { error: "No existe esa tarea" };
+    tarea.hecha = true;
+    return { ok: true, mensaje: `Tarea ${tarea.id} completada` };
+  }
+
+  if (nombre === "ver_agenda") {
+    const limite = new Date(Date.now() + 30 * 86400000);
+    const hasta = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(limite);
+    return {
+      hoy,
+      tareas: estado.tareas.filter((t) => !t.hecha),
+      eventos: memorias.filter((m) => m.tipo === "evento" && m.fecha >= hoy && m.fecha <= hasta),
+    };
+  }
+
+  if (nombre === "calcular") {
+    const expr = String(args.expresion || "");
+    if (!/^[0-9+\-*/().\s]+$/.test(expr)) return { error: "Expresión no permitida" };
+    try {
+      return { resultado: Function(`"use strict"; return (${expr});`)() };
+    } catch {
+      return { error: "No se pudo calcular" };
+    }
+  }
+
+  return { error: `Herramienta desconocida: ${nombre}` };
+}
+
+// ---------- Prompt del sistema ----------
+function construirSistema(estado, memorias) {
+  const hoy = hoyISO();
+  const datos = memorias.filter((m) => m.tipo === "dato").slice(0, 40);
+  const proyectos = memorias.filter((m) => m.tipo === "proyecto");
+  const eventos = memorias
+    .filter((m) => m.tipo === "evento" && m.fecha && m.fecha >= hoy)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha))
+    .slice(0, 20);
+  const tareas = estado.tareas.filter((t) => !t.hecha).slice(0, 50);
+
+  return `Sos el asistente personal de boss.net: un jefe o líder que organiza el día, lleva los proyectos y avisa lo importante. Hablás en español rioplatense con voseo, cercano y directo. Podés usar expresiones del Litoral y del Nordeste argentino ("che", "dale", "mirá", "de una") sin forzar.
+
+Hoy es ${hoy} (hora de Buenos Aires).
+
+Tenés memoria a largo plazo: lo que sigue es lo que el usuario te pidió recordar. Usalo cuando sea relevante, sin repetirlo de memoria cada vez.
+
+Reglas:
+- Si el usuario dice algo importante (un cliente, una fecha, un proyecto, una preferencia), guardalo con la herramienta que corresponda, sin pedir permiso. Un dato suelto va con recordar_dato, un trabajo con varios pasos con crear_proyecto y algo con fecha con agendar_evento.
+- Nunca guardes contraseñas, claves de API ni datos de tarjetas.
+- Si el usuario pide cerrar algo, usá cerrar_memoria con el id que aparece abajo.
+- Si pregunta qué tiene para hacer, usá ver_agenda y ordená por urgencia: vencido, hoy, después.
+- Si falta un dato para agendar algo, preguntá una sola cosa.
+- Si no sabés algo o no tenés el dato, decilo.
+- Usá las herramientas solo para guardar o consultar datos. Cuando ya guardaste lo que te pidieron, respondé en texto y no vuelvas a llamar herramientas.
+
+Datos guardados:
+${JSON.stringify(datos)}
+
+Proyectos activos:
+${JSON.stringify(proyectos)}
+
+Próximos eventos:
+${JSON.stringify(eventos)}
+
+Tareas pendientes:
+${JSON.stringify(tareas)}`;
+}
+
+// ---------- Bucle del agente ----------
+async function correrAgente(messages, groqKey, ctx) {
+  const MAX_PASOS = 8;
+
+  for (let paso = 0; paso < MAX_PASOS; paso++) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${groqKey}`,
+      },
+      body: JSON.stringify({ model: "openai/gpt-oss-120b", messages, tools: TOOLS }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      console.log("Error de Groq:", data);
+      throw Object.assign(new Error(data.error?.message || "Error de Groq"), { status: res.status });
+    }
+
+    const mensajeIA = data.choices?.[0]?.message;
+    if (!mensajeIA) return "No obtuve respuesta.";
+    if (!mensajeIA.tool_calls?.length) return mensajeIA.content || "No obtuve respuesta.";
+
+    messages.push(mensajeIA);
+    for (const llamada of mensajeIA.tool_calls) {
+      const resultado = await ejecutarHerramienta(llamada.function.name, llamada.function.arguments, ctx);
+      messages.push({
+        role: "tool",
+        tool_call_id: llamada.id,
+        content: JSON.stringify(resultado),
+      });
+    }
+  }
+
+  // Se agotaron los pasos: pedir una respuesta final en texto, sin herramientas
+  const cierre = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${groqKey}`,
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-oss-120b",
+      messages: [
+        ...messages,
+        {
+          role: "system",
+          content: "Ya no podés usar herramientas. Respondé al usuario en texto con lo que ya hiciste y lo que falta.",
+        },
+      ],
+    }),
+  });
+
+  const datosCierre = await cierre.json().catch(() => ({}));
+  return (
+    datosCierre.choices?.[0]?.message?.content ||
+    "Guardé lo que pude, pero no llegué a resumirlo. Decime qué querés ver primero."
+  );
+}
+
+// ---------- Handler ----------
+exports.handler = async (event) => {
+  if (event.httpMethod !== "POST") return respond(405, { error: "Método no permitido" });
+
+  const groqKey = event.headers["x-groq-key"];
+  if (!groqKey) return respond(401, { error: "Falta tu API key de Groq" });
+
+  const token = (event.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
+  if (!token) return respond(403, { error: "Tenés que iniciar sesión" });
+
+  const usuario = await obtenerUsuario(token);
+  if (!usuario) return respond(403, { error: "Tu sesión venció, volvé a entrar" });
+
+  let body;
+  try {
+    body = JSON.parse(event.body);
+  } catch {
+    return respond(400, { error: "Solicitud inválida" });
+  }
+
+  const mensaje = String(body.mensaje || "").trim();
+  if (!mensaje) return respond(400, { error: "Mensaje vacío" });
+
+  const estado = normalizarEstado(body.estado);
+  const esUuid = (s) => /^[0-9a-f-]{36}$/i.test(s || "");
+  let conversacionId = esUuid(body.conversacion_id) ? body.conversacion_id : null;
+
+  try {
+    if (!conversacionId) {
+      conversacionId = await crearConversacion(token, usuario.id, mensaje);
+    }
+
+    const { historial, memorias } = await cargarContexto(token, conversacionId);
+    await guardarMensaje(token, usuario.id, conversacionId, "user", mensaje);
+
+    const messages = [
+      { role: "system", content: construirSistema(estado, memorias) },
+      ...historial.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: mensaje },
+    ];
+
+    const reply = await correrAgente(messages, groqKey, {
+      estado,
+      token,
+      userId: usuario.id,
+      memorias,
+    });
+
+    await guardarMensaje(token, usuario.id, conversacionId, "assistant", reply);
+    await tocarConversacion(token, conversacionId);
+
+    return respond(200, { reply, estado, conversacion_id: conversacionId });
+  } catch (err) {
+    console.log("Error del agente:", err);
+    if (err.status) return respond(err.status, { error: err.message });
+    return respond(500, { error: "No se pudo completar la respuesta" });
+  }
+};
