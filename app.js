@@ -926,8 +926,7 @@ $("listaProyectos").addEventListener("click", async (e) => {
 // NAVEGACIÓN
 // ============================================================
 $("btnNuevo").addEventListener("click", nuevoChat);
-$("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("abierto"));
-$("panelBtn").addEventListener("click", () => $("panel").classList.toggle("abierto"));
+
 
 // ============================================================
 // SESIÓN
@@ -1012,6 +1011,99 @@ document.querySelectorAll(".resize-handle").forEach((h) => {
 });
 
 cargarAnchos();
+// ============================================================
+// MÓVIL: cerrar paneles, tocar afuera y botón atrás
+// ============================================================
+const velo = $("velo");
+
+function abrirPanel(id) {
+  document.querySelectorAll(".sidebar, .panel").forEach((p) => {
+    if (p.id !== id) p.classList.remove("abierto");
+  });
+  $(id).classList.add("abierto");
+  velo.classList.remove("oculto");
+  history.pushState({ panel: id }, "");
+}
+
+function cerrarPaneles(usarHistoria = true) {
+  const estabaAbierto = document.querySelector(".sidebar.abierto, .panel.abierto");
+  document.querySelectorAll(".sidebar, .panel").forEach((p) => p.classList.remove("abierto"));
+  velo.classList.add("oculto");
+  if (usarHistoria && estabaAbierto && history.state?.panel) history.back();
+}
+
+$("menuBtn").addEventListener("click", () => abrirPanel("sidebar"));
+$("panelBtn").addEventListener("click", () => abrirPanel("panel"));
+
+document.querySelectorAll("[data-cerrar]").forEach((btn) => {
+  btn.addEventListener("click", () => cerrarPaneles());
+});
+
+velo.addEventListener("click", () => cerrarPaneles());
+
+window.addEventListener("popstate", () => {
+  cerrarPaneles(false);
+});
+// ============================================================
+// CAMBIAR CONTRASEÑA DESDE LA CUENTA
+// ============================================================
+const passScreen = $("passScreen");
+const passNueva = $("passNueva");
+const passRepetir = $("passRepetir");
+const passMsg = $("passMsg");
+
+function mostrarCambioPass() {
+  passNueva.value = "";
+  passRepetir.value = "";
+  passMsg.textContent = "";
+  passScreen.classList.remove("oculto");
+  passNueva.focus();
+}
+
+function ocultarCambioPass() {
+  passScreen.classList.add("oculto");
+}
+
+$("btnCambiarPass").addEventListener("click", () => {
+  $("sidebar").classList.remove("abierto");
+  $("velo").classList.add("oculto");
+  mostrarCambioPass();
+});
+
+$("cancelarPass").addEventListener("click", ocultarCambioPass);
+
+$("guardarPass").addEventListener("click", async () => {
+  const nueva = passNueva.value;
+  const repetir = passRepetir.value;
+
+  if (nueva.length < 6) {
+    passMsg.textContent = "La contraseña tiene que tener al menos 6 caracteres.";
+    return;
+  }
+  if (nueva !== repetir) {
+    passMsg.textContent = "Las dos contraseñas no coinciden.";
+    return;
+  }
+
+  const btn = $("guardarPass");
+  btn.disabled = true;
+  passMsg.textContent = "Guardando...";
+
+  const { error } = await sb.auth.updateUser({ password: nueva });
+
+  btn.disabled = false;
+  if (error) {
+    passMsg.textContent = "No se pudo cambiar: " + error.message;
+    return;
+  }
+
+  passMsg.classList.add("ok");
+  passMsg.textContent = "Contraseña cambiada. Ya podés usar la nueva.";
+  setTimeout(() => {
+    passMsg.classList.remove("ok");
+    ocultarCambioPass();
+  }, 1500);
+});
 // ============================================================
 // ARRANQUE
 // ============================================================

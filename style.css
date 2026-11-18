@@ -1002,3 +1002,51 @@ body.redimensionando {
   .app { grid-template-columns: 1fr; }
   .resize-handle { display: none; }
 }
+/* Deja espacio en la parte inferior para barras flotantes externas */
+.composer {
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom) + 60px);
+}
+/* ---------- Móvil: paneles con cierre y accesibilidad ---------- */
+.panel-cabecera,
+.sidebar-cabecera {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.9rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.cerrar-panel {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--text);
+  border: 1px solid var(--glass-border);
+  box-shadow: none;
+  font-size: 1rem;
+  display: grid;
+  place-items: center;
+}
+
+.velo {
+  position: fixed;
+  inset: 0;
+  background: rgba(60, 50, 40, 0.25);
+  z-index: 35;
+}
+.velo.oculto { display: none; }
+
+@media (max-width: 1100px) {
+  .panel-cabecera { display: flex; }
+}
+
+@media (max-width: 760px) {
+  .sidebar-cabecera { display: flex; }
+  .sidebar.abierto,
+  .panel.abierto {
+    box-shadow: 0 0 40px rgba(60, 50, 40, 0.25);
+  }
+}

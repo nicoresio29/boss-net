@@ -144,9 +144,13 @@
 
   <!-- ===== Aplicación ===== -->
   <div class="app">
-
+<div id="velo" class="velo oculto"></div>
     <!-- Barra lateral -->
     <aside class="sidebar" id="sidebar">
+      <div class="sidebar-cabecera">
+  <span>Menú</span>
+  <button type="button" class="cerrar-panel" data-cerrar="sidebar" aria-label="Cerrar menú">✕</button>
+</div>
       <div class="sb-brand">
         <img src="/favicon.svg?v=2" alt="boss.net" class="logo-img">
         <span>boss.net</span>
@@ -182,6 +186,7 @@
           <ul id="menuCuenta" class="menu-cuenta oculto"></ul>
         </div>
         <button id="cambiarClave" type="button" class="sb-item">API key de Groq</button>
+        <button id="btnCambiarPass" type="button" class="sb-item">Cambiar contraseña</button>
         <button id="cerrarSesion" type="button" class="sb-item">Salir</button>
       </div>
     </aside>
@@ -213,6 +218,10 @@
 
     <!-- Panel derecho: Studio y Work -->
     <aside class="panel" id="panel">
+      <div class="panel-cabecera">
+  <span>Panel</span>
+  <button type="button" class="cerrar-panel" data-cerrar="panel" aria-label="Cerrar panel">✕</button>
+</div>
       <div class="panel-tabs">
         <button type="button" class="ptab activo" data-area="studio">Studio</button>
         <button type="button" class="ptab" data-area="work">Work</button>
@@ -249,6 +258,27 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 
+  <!-- Modal: cambiar contraseña -->
+<div id="passScreen" class="lg-screen oculto">
+  <div class="lg-wrap">
+    <div class="lg-brand">
+      <img src="/favicon.svg?v=2" alt="boss.net" class="logo-img">
+      <span>Cambiar contraseña</span>
+    </div>
+
+    <div class="lg-card">
+      <h2>Elegí una contraseña nueva</h2>
+      <p class="lg-sub">Mínimo 6 caracteres.</p>
+
+      <input id="passNueva" type="password" placeholder="Contraseña nueva" minlength="6" autocomplete="new-password">
+      <input id="passRepetir" type="password" placeholder="Repetí la contraseña" minlength="6" autocomplete="new-password">
+
+      <button id="guardarPass" type="button" class="lg-primary">Guardar contraseña</button>
+      <button id="cancelarPass" type="button" class="lg-link">Cancelar</button>
+      <p id="passMsg" class="lg-msg"></p>
+    </div>
+  </div>
+</div>
   <!-- ===== Lógica ===== -->
   <script src="/app.js"></script>
 </body>
