@@ -1002,10 +1002,11 @@ body.redimensionando {
   .app { grid-template-columns: 1fr; }
   .resize-handle { display: none; }
 }
-/* Deja espacio en la parte inferior para barras flotantes externas */
+/* ---------- Espacio para la barra de Netlify en el celular ---------- */
 .composer {
   padding-bottom: calc(1rem + env(safe-area-inset-bottom) + 60px);
 }
+
 /* ---------- Móvil: paneles con cierre y accesibilidad ---------- */
 .panel-cabecera,
 .sidebar-cabecera {
