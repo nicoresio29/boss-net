@@ -238,14 +238,7 @@ const mosaicos = {
         <pre class="log">${log.length ? escapeHtml(log.slice(-20).join("\n")) : "Sin actividad todavía."}</pre>`;
     },
   },
-  docs: {
-    titulo: "Documentación",
-    html: () => `<ul class="sb-lista">
-      <li><a href="https://console.groq.com/docs" target="_blank" rel="noopener">Groq · Documentación</a></li>
-      <li><a href="https://supabase.com/docs" target="_blank" rel="noopener">Supabase · Documentación</a></li>
-      <li><a href="https://docs.netlify.com" target="_blank" rel="noopener">Netlify · Documentación</a></li>
-    </ul>`,
-  },
+  
   tareas: {
     titulo: "Panel de tareas pendientes",
     html: () => {
@@ -358,6 +351,14 @@ function mostrarClave(puedeCancelar = false) {
 
 function ocultarClave() {
   keyScreen.classList.add("oculto");
+}
+
+// Lista de admins que no necesitan clave de Groq (usan FreeLLMAPI en el servidor)
+const ADMIN_EMAILS_FRONT = ["nicolas.resio.95@gmail.com"];
+
+function esMaestra(session) {
+  const mail = (session?.user?.email || "").toLowerCase();
+  return ADMIN_EMAILS_FRONT.includes(mail);
 }
 
 $("guardarClave").addEventListener("click", () => {
@@ -550,7 +551,8 @@ async function revisarPantallas(session) {
     return;
   }
 
-  loginScreen.classList.add("oculto");
+  loginScreen.classList.add("oculto"); 
+  if (esMaestra(session)) { ocultarClave(); }
   setMsg("");
 
   if (!claveGroq()) {

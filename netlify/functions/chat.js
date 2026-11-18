@@ -2,12 +2,27 @@ const TZ = "America/Argentina/Buenos_Aires";
 const SUPABASE_URL = "https://wplaadbewlbyeafohfjm.supabase.co";
 const SUPABASE_KEY = "sb_publishable_jGbMu5U9D00_Oe9ATrzvvQ_1a2kYNqj"; // publishable: segura en el servidor
 
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_MODEL = "openai/gpt-oss-120b";
+
+const FREELLMAPI_URL = process.env.FREELLMAPI_URL || "http://127.0.0.1:31415/v1/chat/completions";
+const FREELLMAPI_MODEL = "auto";
+
 function hoyISO() {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(new Date());
 }
 
 function respond(statusCode, body) {
   return { statusCode, body: JSON.stringify(body) };
+}
+
+// Cuenta maestra: los mails de ADMIN_EMAILS (separados por coma) usan FreeLLMAPI
+function esAdmin(usuario) {
+  const lista = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((m) => m.trim().toLowerCase())
+    .filter(Boolean);
+  return lista.includes((usuario.email || "").toLowerCase());
 }
 
 // ---------- Supabase ----------
@@ -210,8 +225,18 @@ async function ejecutarHerramienta(nombre, argsTexto, ctx) {
 }
 
 // ---------- Prompt del sistema ----------
-function construirSistema(estado, memorias) {
+function construirSistema(estado, memorias, perfil) {
   const hoy = hoyISO();
+  const nombreAgente = perfil?.nombre_agente || "boss";
+  const nombreUsuario = perfil?.nombre_usuario || "vos";
+  const tonos = {
+    cercano: "Hablás de forma cercana y cálida, como un compañero de confianza.",
+    formal: "Hablás de forma formal y respetuosa, con frases completas y sin coloquialismos.",
+    directo: "Hablás de forma directa y breve, yendo al grano sin rodeos.",
+    divertido: "Hablás de forma simpática y con humor liviano, sin perder claridad.",
+  };
+  const tonoTexto = tonos[perfil?.tono] || tonos.cercano;
+
   const datos = memorias.filter((m) => m.tipo === "dato").slice(0, 40);
   const proyectos = memorias.filter((m) => m.tipo === "proyecto");
   const eventos = memorias
@@ -220,7 +245,7 @@ function construirSistema(estado, memorias) {
     .slice(0, 20);
   const tareas = estado.tareas.filter((t) => !t.hecha).slice(0, 50);
 
-  return `Sos el asistente personal de boss.net: un jefe o líder que organiza el día, lleva los proyectos y avisa lo importante. Hablás en español rioplatense con voseo, cercano y directo. Podés usar expresiones del Litoral y del Nordeste argentino ("che", "dale", "mirá", "de una") sin forzar.
+  return `Sos ${nombreAgente}, el asistente personal de ${nombreUsuario} dentro de boss.net. Organizás el día, llevás los proyectos y avisás lo importante. Hablás en español rioplatense con voseo. ${tonoTexto}
 
 Hoy es ${hoy} (hora de Buenos Aires).
 
@@ -249,23 +274,24 @@ ${JSON.stringify(tareas)}`;
 }
 
 // ---------- Bucle del agente ----------
-async function correrAgente(messages, groqKey, ctx) {
+// prov = { nombre, url, key, model }
+async function correrAgente(messages, prov, ctx) {
   const MAX_PASOS = 8;
 
   for (let paso = 0; paso < MAX_PASOS; paso++) {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const res = await fetch(prov.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${groqKey}`,
+        Authorization: `Bearer ${prov.key}`,
       },
-      body: JSON.stringify({ model: "openai/gpt-oss-120b", messages, tools: TOOLS }),
+      body: JSON.stringify({ model: prov.model, messages, tools: TOOLS }),
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      console.log("Error de Groq:", data);
-      throw Object.assign(new Error(data.error?.message || "Error de Groq"), { status: res.status });
+      console.log(`Error de ${prov.nombre}:`, data);
+      throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
     }
 
     const mensajeIA = data.choices?.[0]?.message;
@@ -284,14 +310,14 @@ async function correrAgente(messages, groqKey, ctx) {
   }
 
   // Se agotaron los pasos: pedir una respuesta final en texto, sin herramientas
-  const cierre = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const cierre = await fetch(prov.url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${groqKey}`,
+      Authorization: `Bearer ${prov.key}`,
     },
     body: JSON.stringify({
-      model: "openai/gpt-oss-120b",
+      model: prov.model,
       messages: [
         ...messages,
         {
@@ -313,14 +339,24 @@ async function correrAgente(messages, groqKey, ctx) {
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return respond(405, { error: "Método no permitido" });
 
-  const groqKey = event.headers["x-groq-key"];
-  if (!groqKey) return respond(401, { error: "Falta tu API key de Groq" });
-
   const token = (event.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
   if (!token) return respond(403, { error: "Tenés que iniciar sesión" });
 
   const usuario = await obtenerUsuario(token);
   if (!usuario) return respond(403, { error: "Tu sesión venció, volvé a entrar" });
+
+  // Proveedores disponibles para esta cuenta, en orden de prioridad
+  const freellmapiKey = process.env.FREELLMAPI_KEY || "";
+  const groqKey = event.headers["x-groq-key"] || "";
+
+  const proveedores = [];
+  if (esAdmin(usuario) && freellmapiKey) {
+    proveedores.push({ nombre: "FreeLLMAPI", url: FREELLMAPI_URL, key: freellmapiKey, model: FREELLMAPI_MODEL });
+  }
+  if (groqKey) {
+    proveedores.push({ nombre: "Groq", url: GROQ_URL, key: groqKey, model: GROQ_MODEL });
+  }
+  if (!proveedores.length) return respond(401, { error: "Falta tu API key de Groq" });
 
   let body;
   try {
@@ -344,18 +380,29 @@ exports.handler = async (event) => {
     const { historial, memorias } = await cargarContexto(token, conversacionId);
     await guardarMensaje(token, usuario.id, conversacionId, "user", mensaje);
 
-    const messages = [
-      { role: "system", content: construirSistema(estado, memorias) },
-      ...historial.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user", content: mensaje },
-    ];
+    const sistema = { role: "system", content: construirSistema(estado, memorias, body.perfil) };
+    const historialMensajes = historial.map((m) => ({ role: m.role, content: m.content }));
 
-    const reply = await correrAgente(messages, groqKey, {
-      estado,
-      token,
-      userId: usuario.id,
-      memorias,
-    });
+    // Intenta con cada proveedor; si uno falla, pasa al siguiente
+    let reply = null;
+    let ultimoError = null;
+    for (const prov of proveedores) {
+      try {
+        const messages = [sistema, ...historialMensajes, { role: "user", content: mensaje }];
+        reply = await correrAgente(messages, prov, {
+          estado,
+          token,
+          userId: usuario.id,
+          memorias,
+        });
+        break;
+      } catch (err) {
+        ultimoError = err;
+        console.log(`Falló ${prov.nombre}, pruebo el siguiente:`, err.message);
+      }
+    }
+
+    if (reply === null) throw ultimoError || new Error("No se pudo completar la respuesta");
 
     await guardarMensaje(token, usuario.id, conversacionId, "assistant", reply);
     await tocarConversacion(token, conversacionId);
