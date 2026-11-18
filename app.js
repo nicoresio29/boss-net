@@ -2,7 +2,7 @@
 // CONFIGURACIÓN
 // ============================================================
 const SUPABASE_URL = "https://wplaadbewlbyeafohfjm.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_jGbMu5U9D00_Oe9ATrzvvQ_1a2kYNqj";
+const SUPABASE_ANON_KEY = "sb_publishable_mBAz_UDxEv1be_GImtSBvQ_q5DBgsA9";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const REDIRECT = window.location.origin + "/jefe-global.html";
 
@@ -953,7 +953,65 @@ sb.auth.onAuthStateChange(async (_event, session) => {
     await refrescarProyectos();
   }
 });
+// ============================================================
+// BARRAS REDIMENSIONABLES
+// ============================================================
+const MIN_IZQ = 200;
+const MAX_IZQ = 420;
+const MIN_DER = 260;
+const MAX_DER = 520;
 
+function aplicarAnchos(izq, der) {
+  document.documentElement.style.setProperty("--ancho-izq", izq + "px");
+  document.documentElement.style.setProperty("--ancho-der", der + "px");
+  localStorage.setItem("boss_anchos", JSON.stringify({ izq, der }));
+}
+
+function cargarAnchos() {
+  const guardado = JSON.parse(localStorage.getItem("boss_anchos") || "null");
+  if (guardado) aplicarAnchos(guardado.izq, guardado.der);
+}
+
+function iniciarArrastre(handle, lado) {
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    handle.classList.add("activo");
+    document.body.classList.add("redimensionando");
+
+    const anchoIzq = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--ancho-izq")) || 260;
+    const anchoDer = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--ancho-der")) || 330;
+    const inicioX = e.clientX;
+
+    function mover(ev) {
+      const delta = ev.clientX - inicioX;
+      let izq = anchoIzq;
+      let der = anchoDer;
+
+      if (lado === "izquierda") {
+        izq = Math.min(MAX_IZQ, Math.max(MIN_IZQ, anchoIzq + delta));
+      } else {
+        der = Math.min(MAX_DER, Math.max(MIN_DER, anchoDer - delta));
+      }
+      aplicarAnchos(izq, der);
+    }
+
+    function soltar() {
+      handle.classList.remove("activo");
+      document.body.classList.remove("redimensionando");
+      document.removeEventListener("mousemove", mover);
+      document.removeEventListener("mouseup", soltar);
+    }
+
+    document.addEventListener("mousemove", mover);
+    document.addEventListener("mouseup", soltar);
+  });
+}
+
+document.querySelectorAll(".resize-handle").forEach((h) => {
+  iniciarArrastre(h, h.dataset.lado);
+});
+
+cargarAnchos();
 // ============================================================
 // ARRANQUE
 // ============================================================

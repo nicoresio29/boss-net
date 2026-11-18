@@ -960,3 +960,45 @@ input:-webkit-autofill:focus {
   display: block;
   box-shadow: 0 6px 16px rgba(127, 145, 128, 0.25);
 }
+/* ---------- Barras redimensionables ---------- */
+.app {
+  grid-template-columns: var(--ancho-izq, 260px) 6px 1fr 6px var(--ancho-der, 330px);
+}
+
+.resize-handle {
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+}
+.resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(154, 134, 114, 0.25);
+  transition: background 0.2s;
+}
+.resize-handle:hover::after,
+.resize-handle.activo::after {
+  background: var(--accent);
+}
+
+/* Evita que el texto se seleccione mientras arrastrás */
+body.redimensionando {
+  user-select: none;
+  cursor: col-resize;
+}
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: var(--ancho-izq, 250px) 6px 1fr; }
+  .resize-handle[data-lado="derecha"] { display: none; }
+}
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  .resize-handle { display: none; }
+}
