@@ -1,12 +1,42 @@
 const TZ = "America/Argentina/Buenos_Aires";
 const SUPABASE_URL = "https://wplaadbewlbyeafohfjm.supabase.co";
 const SUPABASE_KEY = "sb_publishable_jGbMu5U9D00_Oe9ATrzvvQ_1a2kYNqj"; // publishable: segura en el servidor
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "openai/gpt-oss-120b";
-
-const FREELLMAPI_URL = process.env.FREELLMAPI_URL || "http://127.0.0.1:31415/v1/chat/completions";
-const FREELLMAPI_MODEL = "auto";
+// ---------- Proveedores ----------
+const PROVEEDORES = {
+  freellmapi: {
+    tipo: "maestro",
+    url: process.env.FREELLMAPI_URL || "http://127.0.0.1:31415/v1/chat/completions",
+    modelo: "auto",
+    formato: "openai",
+    claveEnv: "FREELLMAPI_KEY",
+  },
+  groq: {
+    tipo: "usuario",
+    url: "https://api.groq.com/openai/v1/chat/completions",
+    modelo: "openai/gpt-oss-120b",
+    formato: "openai",
+  },
+  gemini: {
+    tipo: "usuario",
+    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    modelo: "gemini-2.5-flash",
+    formato: "openai",
+  },
+  openai: {
+    tipo: "usuario",
+    url: "https://api.openai.com/v1/chat/completions",
+    modelo: "gpt-4o-mini",
+    formato: "openai",
+  },
+  anthropic: {
+    tipo: "usuario",
+    url: "https://api.anthropic.com/v1/messages",
+    modelo: "claude-haiku-4-5",
+    formato: "anthropic",
+  },
+};
 
 function hoyISO() {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(new Date());
@@ -16,7 +46,6 @@ function respond(statusCode, body) {
   return { statusCode, body: JSON.stringify(body) };
 }
 
-// Cuenta maestra: los mails de ADMIN_EMAILS (separados por coma) usan FreeLLMAPI
 function esAdmin(usuario) {
   const lista = (process.env.ADMIN_EMAILS || "")
     .split(",")
@@ -129,6 +158,12 @@ const TOOLS = [
   }, ["expresion"]),
 ];
 
+const ANTHROPIC_TOOLS = TOOLS.map((t) => ({
+  name: t.function.name,
+  description: t.function.description,
+  input_schema: t.function.parameters,
+}));
+
 function normalizarEstado(e) {
   return {
     notas: Array.isArray(e?.notas) ? e.notas.slice(-100) : [],
@@ -137,12 +172,16 @@ function normalizarEstado(e) {
   };
 }
 
-async function ejecutarHerramienta(nombre, argsTexto, ctx) {
+async function ejecutarHerramienta(nombre, argsInput, ctx) {
   let args = {};
-  try {
-    args = JSON.parse(argsTexto || "{}");
-  } catch {
-    return { error: "Argumentos inválidos" };
+  if (typeof argsInput === "string") {
+    try {
+      args = JSON.parse(argsInput || "{}");
+    } catch {
+      return { error: "Argumentos inválidos" };
+    }
+  } else if (argsInput && typeof argsInput === "object") {
+    args = argsInput;
   }
 
   const { estado, token, userId, memorias } = ctx;
@@ -175,7 +214,7 @@ async function ejecutarHerramienta(nombre, argsTexto, ctx) {
 
   if (nombre === "cerrar_memoria") {
     const id = String(args.id || "");
-    if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: "Id inválido" };
+    if (!UUID_RE.test(id)) return { error: "Id inválido" };
     await db(`memorias?id=eq.${id}`, token, {
       method: "PATCH",
       headers: { Prefer: "return=minimal" },
@@ -227,6 +266,7 @@ async function ejecutarHerramienta(nombre, argsTexto, ctx) {
 // ---------- Prompt del sistema ----------
 function construirSistema(estado, memorias, perfil) {
   const hoy = hoyISO();
+const ahora = ahoraTexto();
   const nombreAgente = perfil?.nombre_agente || "boss";
   const nombreUsuario = perfil?.nombre_usuario || "vos";
   const tonos = {
@@ -246,8 +286,7 @@ function construirSistema(estado, memorias, perfil) {
   const tareas = estado.tareas.filter((t) => !t.hecha).slice(0, 50);
 
   return `Sos ${nombreAgente}, el asistente personal de ${nombreUsuario} dentro de boss.net. Organizás el día, llevás los proyectos y avisás lo importante. Hablás en español rioplatense con voseo. ${tonoTexto}
-
-Hoy es ${hoy} (hora de Buenos Aires).
+Ahora mismo es ${ahora} (hora de Buenos Aires, formato 24h). La fecha ISO de hoy es ${hoy}.
 
 Tenés memoria a largo plazo: lo que sigue es lo que el usuario te pidió recordar. Usalo cuando sea relevante, sin repetirlo de memoria cada vez.
 
@@ -273,66 +312,123 @@ Tareas pendientes:
 ${JSON.stringify(tareas)}`;
 }
 
-// ---------- Bucle del agente ----------
-// prov = { nombre, url, key, model }
-async function correrAgente(messages, prov, ctx) {
-  const MAX_PASOS = 8;
+// ---------- Llamada a cada proveedor ----------
+async function llamarProveedor(prov, messages, { permitirHerramientas = true } = {}) {
+  if (prov.formato === "anthropic") {
+    const system = messages.find((m) => m.role === "system")?.content || "";
+    const resto = messages.filter((m) => m.role !== "system");
+    const body = {
+      model: prov.modelo,
+      max_tokens: 1024,
+      system,
+      messages: resto,
+    };
+    if (permitirHerramientas) body.tools = ANTHROPIC_TOOLS;
 
-  for (let paso = 0; paso < MAX_PASOS; paso++) {
     const res = await fetch(prov.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${prov.key}`,
+        "x-api-key": prov.key,
+        "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({ model: prov.model, messages, tools: TOOLS }),
+      body: JSON.stringify(body),
     });
-
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      console.log(`Error de ${prov.nombre}:`, data);
-      throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(data.error?.message || "Error de Anthropic"), { status: res.status });
+
+    const bloques = data.content || [];
+    const toolUses = bloques.filter((b) => b.type === "tool_use");
+    if (toolUses.length) {
+      return {
+        texto: null,
+        herramientas: {
+          formato: "anthropic",
+          rawContent: bloques,
+          calls: toolUses.map((b) => ({
+            id: b.id,
+            name: b.name,
+            args: b.input || {},
+          })),
+        },
+      };
     }
 
-    const mensajeIA = data.choices?.[0]?.message;
-    if (!mensajeIA) return "No obtuve respuesta.";
-    if (!mensajeIA.tool_calls?.length) return mensajeIA.content || "No obtuve respuesta.";
-
-    messages.push(mensajeIA);
-    for (const llamada of mensajeIA.tool_calls) {
-      const resultado = await ejecutarHerramienta(llamada.function.name, llamada.function.arguments, ctx);
-      messages.push({
-        role: "tool",
-        tool_call_id: llamada.id,
-        content: JSON.stringify(resultado),
-      });
-    }
+    const texto = bloques.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+    return { texto: texto || "No obtuve respuesta.", herramientas: null };
   }
 
-  // Se agotaron los pasos: pedir una respuesta final en texto, sin herramientas
-  const cierre = await fetch(prov.url, {
+  const body = { model: prov.modelo, messages };
+  if (permitirHerramientas) body.tools = TOOLS;
+
+  const res = await fetch(prov.url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${prov.key}`,
     },
-    body: JSON.stringify({
-      model: prov.model,
-      messages: [
-        ...messages,
-        {
-          role: "system",
-          content: "Ya no podés usar herramientas. Respondé al usuario en texto con lo que ya hiciste y lo que falta.",
-        },
-      ],
-    }),
+    body: JSON.stringify(body),
   });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
 
-  const datosCierre = await cierre.json().catch(() => ({}));
-  return (
-    datosCierre.choices?.[0]?.message?.content ||
-    "Guardé lo que pude, pero no llegué a resumirlo. Decime qué querés ver primero."
+  const mensaje = data.choices?.[0]?.message;
+  if (!mensaje) return { texto: "No obtuve respuesta.", herramientas: null };
+  if (mensaje.tool_calls?.length) {
+    return {
+      texto: null,
+      herramientas: {
+        formato: "openai",
+        rawMessage: mensaje,
+        calls: mensaje.tool_calls.map((tc) => ({
+          id: tc.id,
+          name: tc.function.name,
+          args: tc.function.arguments,
+        })),
+      },
+    };
+  }
+  return { texto: mensaje.content || "No obtuve respuesta.", herramientas: null };
+}
+
+// ---------- Bucle del agente ----------
+async function correrAgente(messages, prov, ctx) {
+  const MAX_PASOS = 8;
+
+  for (let paso = 0; paso < MAX_PASOS; paso++) {
+    const { texto, herramientas } = await llamarProveedor(prov, messages);
+    if (texto !== null) return texto;
+
+    if (herramientas.formato === "anthropic") {
+      messages.push({ role: "assistant", content: herramientas.rawContent });
+      const resultados = [];
+      for (const llamada of herramientas.calls) {
+        const res = await ejecutarHerramienta(llamada.name, llamada.args, ctx);
+        resultados.push({
+          type: "tool_result",
+          tool_use_id: llamada.id,
+          content: JSON.stringify(res),
+        });
+      }
+      messages.push({ role: "user", content: resultados });
+    } else {
+      messages.push(herramientas.rawMessage);
+      for (const llamada of herramientas.calls) {
+        const resultado = await ejecutarHerramienta(llamada.name, llamada.args, ctx);
+        messages.push({ role: "tool", tool_call_id: llamada.id, content: JSON.stringify(resultado) });
+      }
+    }
+  }
+
+  const { texto } = await llamarProveedor(
+    prov,
+    [
+      ...messages,
+      { role: "system", content: "Ya no podés usar herramientas. Respondé al usuario en texto con lo que ya hiciste y lo que falta." },
+    ],
+    { permitirHerramientas: false }
   );
+  return texto || "Guardé lo que pude, pero no llegué a resumirlo. Decime qué querés ver primero.";
 }
 
 // ---------- Handler ----------
@@ -345,19 +441,6 @@ exports.handler = async (event) => {
   const usuario = await obtenerUsuario(token);
   if (!usuario) return respond(403, { error: "Tu sesión venció, volvé a entrar" });
 
-  // Proveedores disponibles para esta cuenta, en orden de prioridad
-  const freellmapiKey = process.env.FREELLMAPI_KEY || "";
-  const groqKey = event.headers["x-groq-key"] || "";
-
-  const proveedores = [];
-  if (esAdmin(usuario) && freellmapiKey) {
-    proveedores.push({ nombre: "FreeLLMAPI", url: FREELLMAPI_URL, key: freellmapiKey, model: FREELLMAPI_MODEL });
-  }
-  if (groqKey) {
-    proveedores.push({ nombre: "Groq", url: GROQ_URL, key: groqKey, model: GROQ_MODEL });
-  }
-  if (!proveedores.length) return respond(401, { error: "Falta tu API key de Groq" });
-
   let body;
   try {
     body = JSON.parse(event.body);
@@ -368,9 +451,25 @@ exports.handler = async (event) => {
   const mensaje = String(body.mensaje || "").trim();
   if (!mensaje) return respond(400, { error: "Mensaje vacío" });
 
+  const proveedorElegido = String(body.proveedor || "groq").toLowerCase();
+  let prov;
+
+  if (esAdmin(usuario)) {
+    const claveMaestra = process.env.FREELLMAPI_KEY;
+    if (!claveMaestra) return respond(500, { error: "Falta FREELLMAPI_KEY en el .env" });
+    prov = { ...PROVEEDORES.freellmapi, nombre: "FreeLLMAPI", key: claveMaestra };
+  } else {
+    const config = PROVEEDORES[proveedorElegido];
+    if (!config || config.tipo !== "usuario") {
+      return respond(400, { error: "Proveedor no disponible" });
+    }
+    const claveUsuario = String(body.clave || "").trim();
+    if (!claveUsuario) return respond(401, { error: `Falta tu clave de ${proveedorElegido}` });
+    prov = { ...config, nombre: proveedorElegido, key: claveUsuario };
+  }
+
   const estado = normalizarEstado(body.estado);
-  const esUuid = (s) => /^[0-9a-f-]{36}$/i.test(s || "");
-  let conversacionId = esUuid(body.conversacion_id) ? body.conversacion_id : null;
+  let conversacionId = UUID_RE.test(body.conversacion_id || "") ? body.conversacion_id : null;
 
   try {
     if (!conversacionId) {
@@ -380,37 +479,34 @@ exports.handler = async (event) => {
     const { historial, memorias } = await cargarContexto(token, conversacionId);
     await guardarMensaje(token, usuario.id, conversacionId, "user", mensaje);
 
-    const sistema = { role: "system", content: construirSistema(estado, memorias, body.perfil) };
-    const historialMensajes = historial.map((m) => ({ role: m.role, content: m.content }));
+    const messages = [
+      { role: "system", content: construirSistema(estado, memorias, body.perfil) },
+      ...historial.map((m) => ({ role: m.role, content: m.content })),
+      { role: "user", content: mensaje },
+    ];
 
-    // Intenta con cada proveedor; si uno falla, pasa al siguiente
-    let reply = null;
-    let ultimoError = null;
-    for (const prov of proveedores) {
-      try {
-        const messages = [sistema, ...historialMensajes, { role: "user", content: mensaje }];
-        reply = await correrAgente(messages, prov, {
-          estado,
-          token,
-          userId: usuario.id,
-          memorias,
-        });
-        break;
-      } catch (err) {
-        ultimoError = err;
-        console.log(`Falló ${prov.nombre}, pruebo el siguiente:`, err.message);
-      }
-    }
-
-    if (reply === null) throw ultimoError || new Error("No se pudo completar la respuesta");
+    const reply = await correrAgente(messages, prov, {
+      estado,
+      token,
+      userId: usuario.id,
+      memorias,
+    });
 
     await guardarMensaje(token, usuario.id, conversacionId, "assistant", reply);
     await tocarConversacion(token, conversacionId);
 
     return respond(200, { reply, estado, conversacion_id: conversacionId });
   } catch (err) {
-    console.log("Error del agente:", err);
+    console.log(`Error de ${prov.nombre}:`, err.message);
     if (err.status) return respond(err.status, { error: err.message });
     return respond(500, { error: "No se pudo completar la respuesta" });
   }
 };
+function ahoraTexto() {
+  return new Intl.DateTimeFormat("es-AR", {
+    timeZone: TZ,
+    dateStyle: "full",
+    timeStyle: "short",
+    hour12: false,
+  }).format(new Date());
+}

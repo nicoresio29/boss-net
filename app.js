@@ -28,7 +28,6 @@ const GREETINGS = [
 
 // ============================================================
 // ESTADO GLOBAL
-// Todas las variables compartidas se declaran acá, antes de usarlas.
 // ============================================================
 let estado = JSON.parse(localStorage.getItem("boss_estado") || '{"notas":[],"tareas":[],"proximoId":1}');
 let modo = "entrar";
@@ -39,7 +38,7 @@ let avatarElegido = AVATARES[0];
 let tonoElegido = "cercano";
 let mosaicoActivo = null;
 let conversacionActual = null;
-const historial = []; // { role: "user" | "model", text: "..." }
+const historial = [];
 
 // ============================================================
 // UTILIDADES
@@ -59,8 +58,16 @@ function registrar(texto) {
   localStorage.setItem("boss_log", JSON.stringify(log.slice(-50)));
 }
 
+function proveedorActivo() {
+  return localStorage.getItem("boss_proveedor") || "groq";
+}
+
+function claveProveedor(proveedor = proveedorActivo()) {
+  return localStorage.getItem("boss_clave_" + proveedor) || "";
+}
+
 function claveGroq() {
-  return localStorage.getItem("boss_groq_key") || "";
+  return claveProveedor(proveedorActivo());
 }
 
 // ============================================================
@@ -222,11 +229,13 @@ const mosaicos = {
     html: () => {
       const pend = estado.tareas.filter((t) => !t.hecha).length;
       const hechas = estado.tareas.filter((t) => t.hecha).length;
+      const tieneClave = esMaestra(sesionActual) || Boolean(claveGroq());
       return `<ul class="sb-lista">
         <li>Tareas pendientes: <strong>${pend}</strong></li>
         <li>Tareas hechas: <strong>${hechas}</strong></li>
         <li>Notas guardadas: <strong>${estado.notas.length}</strong></li>
-        <li>Clave de Groq: <strong>${claveGroq() ? "cargada" : "falta"}</strong></li>
+        <li>Proveedor: <strong>${escapeHtml(esMaestra(sesionActual) ? "FreeLLMAPI (maestro)" : proveedorActivo())}</strong></li>
+        <li>Clave: <strong>${tieneClave ? "cargada" : "falta"}</strong></li>
       </ul>`;
     },
   },
@@ -238,7 +247,6 @@ const mosaicos = {
         <pre class="log">${log.length ? escapeHtml(log.slice(-20).join("\n")) : "Sin actividad todavía."}</pre>`;
     },
   },
-  
   tareas: {
     titulo: "Panel de tareas pendientes",
     html: () => {
@@ -280,15 +288,6 @@ const mosaicos = {
       </ul>`;
     },
   },
-  atajos: {
-    titulo: "Atajos a recursos",
-    html: () => `<div class="atajos">
-      <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq · API keys</a>
-      <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">Supabase</a>
-      <a href="https://app.netlify.com" target="_blank" rel="noopener">Netlify</a>
-      <a href="https://github.com" target="_blank" rel="noopener">GitHub</a>
-    </div>`,
-  },
 };
 
 function abrirMosaico(id) {
@@ -325,7 +324,6 @@ document.querySelectorAll(".mosaico").forEach((btn) => {
 
 $("detalleCerrar").addEventListener("click", cerrarDetalle);
 
-// Un solo listener para el detalle: cierra proyectos o marca tareas
 $("detalleBody").addEventListener("click", (e) => {
   const btnCerrar = e.target.closest("#cerrarProyecto");
   if (btnCerrar) {
@@ -336,7 +334,7 @@ $("detalleBody").addEventListener("click", (e) => {
 });
 
 // ============================================================
-// CLAVE DE GROQ
+// CLAVE DE PROVEEDOR
 // ============================================================
 const keyScreen = $("keyScreen");
 const keyInput = $("groqKeyInput");
@@ -347,33 +345,85 @@ function mostrarClave(puedeCancelar = false) {
   keyMsg.textContent = "";
   $("cancelarClave").classList.toggle("oculto", !puedeCancelar);
   keyScreen.classList.remove("oculto");
+  $("proveedorSelect").value = proveedorActivo();
+  mostrarPasos(proveedorActivo());
 }
 
 function ocultarClave() {
   keyScreen.classList.add("oculto");
 }
 
-// Lista de admins que no necesitan clave de Groq (usan FreeLLMAPI en el servidor)
-const ADMIN_EMAILS_FRONT = ["nicolas.resio.95@gmail.com"];
+$("cancelarClave").addEventListener("click", ocultarClave);
 
+$("cambiarClave").addEventListener("click", () => {
+  $("sidebar").classList.remove("abierto");
+  $("velo").classList.add("oculto");
+  mostrarClave(true);
+});
+
+const ADMIN_EMAILS_FRONT = ["nicolas.resio.95@gmail.com"];
 function esMaestra(session) {
   const mail = (session?.user?.email || "").toLowerCase();
   return ADMIN_EMAILS_FRONT.includes(mail);
 }
 
+const PASOS_PROVEEDOR = {
+  groq: [
+    'Entrá a <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>.',
+    "Tocá <strong>Create API Key</strong>, ponele un nombre y copiala.",
+    "Pegala abajo. Empieza con <code>gsk_</code>.",
+  ],
+  gemini: [
+    'Entrá a <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.',
+    "Tocá <strong>Create API key</strong> y copiala.",
+    "Pegala abajo. Empieza con <code>AIza</code>.",
+  ],
+  openai: [
+    'Entrá a <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>.',
+    "Tocá <strong>Create new secret key</strong> y copiala.",
+    "Pegala abajo. Empieza con <code>sk-</code>. Necesita crédito cargado.",
+  ],
+  anthropic: [
+    'Entrá a <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.',
+    "Tocá <strong>Create Key</strong> y copiala.",
+    "Pegala abajo. Empieza con <code>sk-ant-</code>. Es de pago.",
+  ],
+};
+
+const PREFIJO_PROVEEDOR = {
+  groq: "gsk_",
+  gemini: "AIza",
+  openai: "sk-",
+  anthropic: "sk-ant-",
+};
+
+function mostrarPasos(proveedor) {
+  $("pasosProveedor").innerHTML = PASOS_PROVEEDOR[proveedor]
+    .map((p, i) => `<li><span>${i + 1}</span><div>${p}</div></li>`)
+    .join("");
+}
+
+$("proveedorSelect").addEventListener("change", (e) => {
+  mostrarPasos(e.target.value);
+  keyInput.value = "";
+  keyMsg.textContent = "";
+});
+
 $("guardarClave").addEventListener("click", () => {
+  const proveedor = $("proveedorSelect").value;
   const clave = keyInput.value.trim();
-  if (!clave.startsWith("gsk_") || clave.length < 20) {
-    keyMsg.textContent = "Esa clave no parece válida. Tiene que empezar con gsk_ y estar completa.";
+  const prefijo = PREFIJO_PROVEEDOR[proveedor];
+
+  if (!clave.startsWith(prefijo) || clave.length < 20) {
+    keyMsg.textContent = `Esa clave no parece válida. Tiene que empezar con ${prefijo} y estar completa.`;
     return;
   }
-  localStorage.setItem("boss_groq_key", clave);
+
+  localStorage.setItem("boss_proveedor", proveedor);
+  localStorage.setItem("boss_clave_" + proveedor, clave);
   ocultarClave();
   revisarPantallas(sesionActual);
 });
-
-$("cancelarClave").addEventListener("click", ocultarClave);
-$("cambiarClave").addEventListener("click", () => mostrarClave(true));
 
 // ============================================================
 // CUENTAS
@@ -539,7 +589,7 @@ $("btnPersonalizar").addEventListener("click", async () => {
 });
 
 // ============================================================
-// ORDEN DE PANTALLAS: login → clave de Groq → perfil
+// ORDEN DE PANTALLAS: login → clave → perfil
 // ============================================================
 async function revisarPantallas(session) {
   sesionActual = session;
@@ -551,16 +601,18 @@ async function revisarPantallas(session) {
     return;
   }
 
-  loginScreen.classList.add("oculto"); 
-  if (esMaestra(session)) { ocultarClave(); }
+  loginScreen.classList.add("oculto");
   setMsg("");
 
-  if (!claveGroq()) {
+  if (esMaestra(session)) {
+    ocultarClave();
+  } else if (!claveGroq()) {
     mostrarClave(false);
     perfilScreen.classList.add("oculto");
     return;
+  } else {
+    ocultarClave();
   }
-  ocultarClave();
 
   const existente = await cargarPerfil();
   if (existente) {
@@ -617,9 +669,10 @@ function addTyping() {
 }
 
 function mensajeDeError(err) {
-  if (err.status === 401) return "Tu API key de Groq no es válida. Pegá una nueva desde console.groq.com/keys.";
+  const prov = proveedorActivo();
+  if (err.status === 401) return `Tu API key de ${prov} no es válida o venció. Pegá una nueva.`;
   if (err.status === 403) return "Tu sesión venció. Volvé a entrar.";
-  if (err.status === 429) return "Se agotó tu cuota en Groq. Esperá unos minutos o revisá tu plan en console.groq.com.";
+  if (err.status === 429) return `Se agotó tu cuota en ${prov}. Esperá unos minutos o revisá tu plan.`;
   if (err.status === 404) return "El modelo no está disponible. Revisá el nombre del modelo en chat.js.";
   if (err.status >= 500) return "El servidor tuvo un problema. Intentá de nuevo en unos segundos.";
   if (!err.status) return "No hay conexión con el servidor. Revisá tu internet y probá de nuevo.";
@@ -743,13 +796,14 @@ async function sendMessage(texto) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-groq-key": claveGroq(),
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({
         mensaje: texto,
         estado,
         conversacion_id: conversacionActual,
+        proveedor: proveedorActivo(),
+        clave: claveGroq(),
         perfil: perfil
           ? {
               nombre_usuario: perfil.nombre_usuario,
@@ -768,6 +822,8 @@ async function sendMessage(texto) {
     }
 
     addBot(json.reply);
+        if (ultimoMensajeFueVoz) hablar(json.reply);
+    ultimoMensajeFueVoz = false;
     historial.push({ role: "model", text: json.reply });
 
     if (json.estado) {
@@ -786,8 +842,8 @@ async function sendMessage(texto) {
     addMessage(msg, "error");
     registrar("Error: " + msg);
 
-    if (err.status === 401) {
-      localStorage.removeItem("boss_groq_key");
+    if (err.status === 401 && !esMaestra(sesionActual)) {
+      localStorage.removeItem("boss_clave_" + proveedorActivo());
       mostrarClave(true);
     }
     if (err.status === 403) await sb.auth.signOut();
@@ -800,7 +856,7 @@ async function sendMessage(texto) {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (!claveGroq()) {
+  if (!esMaestra(sesionActual) && !claveGroq()) {
     mostrarClave(false);
     return;
   }
@@ -825,7 +881,6 @@ input.addEventListener("input", () => {
 
 // ============================================================
 // PROYECTOS
-// Se guardan en la tabla "memorias" con tipo = 'proyecto'.
 // ============================================================
 async function cargarProyectos() {
   const { data, error } = await sb
@@ -923,17 +978,68 @@ $("listaProyectos").addEventListener("click", async (e) => {
   const item = e.target.closest("[data-proyecto]");
   if (item) await mostrarDetalleProyecto(item.dataset.proyecto);
 });
+// ============================================================
+// VOZ: dictar (voz a texto) y responder en voz alta (texto a voz)
+// ============================================================
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const hayTTS = "speechSynthesis" in window;
+let ultimoMensajeFueVoz = false;
+let reconocimiento = null;
 
+function hablar(texto) {
+  if (!hayTTS) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(texto.replace(/[*_#`]/g, ""));
+  u.lang = "es-AR";
+  u.rate = 1;
+  speechSynthesis.speak(u);
+}
+
+$("btnMic").addEventListener("click", () => {
+  if (!SpeechRec) {
+    alert("Tu navegador no tiene reconocimiento de voz. Probá con Chrome o Safari.");
+    return;
+  }
+
+  // Si ya está escuchando, lo detiene
+  if (reconocimiento) {
+    reconocimiento.stop();
+    return;
+  }
+
+  reconocimiento = new SpeechRec();
+  reconocimiento.lang = "es-AR";
+  reconocimiento.interimResults = false;
+  reconocimiento.continuous = false;
+
+  $("btnMic").classList.add("escuchando");
+
+  reconocimiento.onresult = (e) => {
+    const texto = e.results[0][0].transcript;
+    input.value = texto;
+    ultimoMensajeFueVoz = true;
+    form.requestSubmit();
+  };
+
+   reconocimiento.onerror = (e) => {
+    keyMsg.textContent = "Error de voz: " + e.error;
+    console.log("Error de reconocimiento:", e.error);
+  };
+
+  reconocimiento.onend = () => {
+    $("btnMic").classList.remove("escuchando");
+    reconocimiento = null;
+  };
+
+  reconocimiento.start();
+});
 // ============================================================
 // NAVEGACIÓN
 // ============================================================
 $("btnNuevo").addEventListener("click", nuevoChat);
 
-
 // ============================================================
 // SESIÓN
-// Un único listener. Se dispara al cargar la página (INITIAL_SESSION)
-// y cada vez que cambia el login.
 // ============================================================
 sb.auth.onAuthStateChange(async (_event, session) => {
   sesionActual = session;
@@ -954,6 +1060,7 @@ sb.auth.onAuthStateChange(async (_event, session) => {
     await refrescarProyectos();
   }
 });
+
 // ============================================================
 // BARRAS REDIMENSIONABLES
 // ============================================================
@@ -1013,6 +1120,7 @@ document.querySelectorAll(".resize-handle").forEach((h) => {
 });
 
 cargarAnchos();
+
 // ============================================================
 // MÓVIL: cerrar paneles, tocar afuera y botón atrás
 // ============================================================
@@ -1046,6 +1154,7 @@ velo.addEventListener("click", () => cerrarPaneles());
 window.addEventListener("popstate", () => {
   cerrarPaneles(false);
 });
+
 // ============================================================
 // CAMBIAR CONTRASEÑA DESDE LA CUENTA
 // ============================================================
@@ -1106,6 +1215,14 @@ $("guardarPass").addEventListener("click", async () => {
     ocultarCambioPass();
   }, 1500);
 });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    document.querySelectorAll(".sidebar, .panel").forEach((p) => p.classList.remove("abierto"));
+    $("velo").classList.add("oculto");
+  }
+});
+
 // ============================================================
 // ARRANQUE
 // ============================================================
