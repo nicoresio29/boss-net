@@ -69,7 +69,7 @@ function esMaestra(session) {
 }
 
 // ============================================================
-// CLAVES DE PROVEEDORES: una por proveedor, en orden de prioridad
+// PROVEEDORES DE IA: lista fija, en orden de prioridad (Groq primero)
 // ============================================================
 const PROVEEDORES_UI = [
   {
@@ -106,12 +106,23 @@ function claveDe(id) {
   return localStorage.getItem("boss_clave_" + id) || "";
 }
 
-// Proveedores con clave guardada, en el orden de la lista (Groq primero)
-function proveedoresConClave() {
-  return PROVEEDORES_UI.filter((p) => claveDe(p.id)).map((p) => p.id);
+// Un proveedor puede estar pausado (con clave guardada pero sin usar)
+function proveedorApagado(id) {
+  return localStorage.getItem("boss_off_" + id) === "1";
 }
 
-// Proveedor principal: el primero con clave. Lo usa el servidor como prioridad.
+// Proveedores con clave y activados, en orden de prioridad
+function proveedoresConClave() {
+  return PROVEEDORES_UI
+    .filter((p) => claveDe(p.id) && !proveedorApagado(p.id))
+    .map((p) => p.id);
+}
+
+function sincronizarProveedores() {
+  localStorage.setItem("boss_proveedores", JSON.stringify(proveedoresConClave()));
+}
+
+// Proveedor principal: el primero activo con clave
 function proveedorActivo() {
   return proveedoresConClave()[0] || "groq";
 }
@@ -224,28 +235,91 @@ $("cerrarSesion").addEventListener("click", async () => {
 });
 
 // ============================================================
-// CLAVES: pantalla con una clave por proveedor
+// CLAVES: una fila por proveedor. Se guarda al salir del campo.
 // ============================================================
 const keyScreen = $("keyScreen");
 const keyMsg = $("keyMsg");
+const listaProv = $("listaProveedores");
+let clavesRenderizadas = false;
+
+function renderFilaProveedor(p) {
+  return `
+    <div class="prov-row" data-prov="${p.id}">
+      <div class="prov-head" data-toggle="${p.id}" role="button" tabindex="0" aria-expanded="false">
+        <label class="prov-switch" title="Usar este proveedor">
+          <input type="checkbox" data-switch="${p.id}">
+          <span></span>
+        </label>
+        <span class="prov-nombre">${p.nombre}</span>
+        <span class="prov-badge">${p.gratis ? "gratis" : "pago"}</span>
+        <span class="prov-estado" data-estado="${p.id}"></span>
+        <span class="prov-flecha" aria-hidden="true">▾</span>
+      </div>
+      <div class="prov-body oculto">
+        <div class="prov-detalle">${p.ayuda}</div>
+        <input type="password" autocomplete="off" spellcheck="false"
+               data-input="${p.id}"
+               placeholder="${p.prefijo ? "Empieza con " + p.prefijo : "Pegá tu clave"}">
+      </div>
+    </div>`;
+}
+
+// Actualiza estados, interruptores y placeholders sin borrar lo que se estaba escribiendo
+function actualizarEstados() {
+  PROVEEDORES_UI.forEach((p) => {
+    const tiene = Boolean(claveDe(p.id));
+    const apagado = proveedorApagado(p.id);
+    const estadoEl = listaProv.querySelector(`[data-estado="${p.id}"]`);
+    const sw = listaProv.querySelector(`[data-switch="${p.id}"]`);
+    const input = listaProv.querySelector(`[data-input="${p.id}"]`);
+
+    if (estadoEl) {
+      estadoEl.textContent = !tiene ? "sin clave" : apagado ? "pausada" : "✓ cargada";
+      estadoEl.classList.toggle("ok", tiene && !apagado);
+    }
+    if (sw) {
+      sw.checked = tiene && !apagado;
+      sw.disabled = !tiene;
+    }
+    if (input) {
+      input.placeholder = tiene
+        ? "Guardada. Pegá otra para reemplazar"
+        : p.prefijo
+          ? "Empieza con " + p.prefijo
+          : "Pegá tu clave";
+    }
+  });
+}
+
+// Valida y guarda la clave de un proveedor. Devuelve false si hay un error.
+function guardarProveedor(id) {
+  const p = PROVEEDORES_UI.find((x) => x.id === id);
+  const input = listaProv.querySelector(`[data-input="${id}"]`);
+  const clave = (input?.value || "").trim();
+  if (!input || !clave) return true; // no pegaste nada: se conserva lo que estaba
+
+  if (clave.length < 20 || (p.prefijo && !clave.startsWith(p.prefijo))) {
+    keyMsg.textContent = `La clave de ${p.nombre} no parece válida. Revisala y volvé a pegarla.`;
+    return false; // el texto queda en el campo para corregirlo
+  }
+
+  localStorage.setItem("boss_clave_" + id, clave);
+  localStorage.removeItem("boss_off_" + id); // al cargar una clave nueva, queda activa
+  input.value = "";
+  sincronizarProveedores();
+  actualizarEstados();
+  keyMsg.textContent = `${p.nombre} guardada ✓`;
+  return true;
+}
 
 function mostrarClave(puedeCancelar = false) {
   $("cancelarClave").classList.toggle("oculto", !puedeCancelar);
   keyMsg.textContent = "";
-  $("listaProveedores").innerHTML = PROVEEDORES_UI.map((p) => {
-    const guardada = claveDe(p.id);
-    return `
-      <div class="prov-item" data-prov="${p.id}">
-        <div class="prov-titulo">
-          <span>${p.nombre}${p.gratis ? " · gratis" : " · pago"}</span>
-          ${guardada ? '<span class="prov-ok">✓ cargada</span>' : ""}
-        </div>
-        <div class="prov-detalle">${p.ayuda}</div>
-        <input type="password" autocomplete="off" spellcheck="false"
-               placeholder="${p.prefijo ? "Empieza con " + p.prefijo : "Pegá tu clave"}"
-               data-input="${p.id}" value="">
-      </div>`;
-  }).join("");
+  if (!clavesRenderizadas) {
+    listaProv.innerHTML = PROVEEDORES_UI.map(renderFilaProveedor).join("");
+    clavesRenderizadas = true;
+  }
+  actualizarEstados();
   keyScreen.classList.remove("oculto");
 }
 
@@ -253,31 +327,58 @@ function ocultarClave() {
   keyScreen.classList.add("oculto");
 }
 
+// Abrir y cerrar cada fila
+listaProv.addEventListener("click", (e) => {
+  if (e.target.closest(".prov-switch")) return; // el interruptor tiene su propio evento
+  const head = e.target.closest("[data-toggle]");
+  if (!head) return;
+
+  const row = head.closest(".prov-row");
+  const body = row.querySelector(".prov-body");
+  const abierto = !body.classList.toggle("oculto");
+  head.setAttribute("aria-expanded", String(abierto));
+  row.querySelector(".prov-flecha").textContent = abierto ? "▴" : "▾";
+  if (abierto) row.querySelector("input[data-input]").focus();
+});
+
+listaProv.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.dataset.input) {
+    e.preventDefault();
+    guardarProveedor(e.target.dataset.input);
+    return;
+  }
+  if (e.key === "Enter" && e.target.matches("[data-toggle]")) {
+    e.preventDefault();
+    e.target.click();
+  }
+});
+
+// Guardar al salir del campo, y activar o pausar con el interruptor
+listaProv.addEventListener("change", (e) => {
+  const t = e.target;
+
+  if (t.dataset.switch) {
+    const id = t.dataset.switch;
+    if (t.checked) localStorage.removeItem("boss_off_" + id);
+    else localStorage.setItem("boss_off_" + id, "1");
+    sincronizarProveedores();
+    actualizarEstados();
+    keyMsg.textContent = proveedoresConClave().length
+      ? ""
+      : "No hay ningún proveedor activo. Activá al menos uno.";
+    return;
+  }
+
+  if (t.dataset.input) guardarProveedor(t.dataset.input);
+});
+
 $("guardarClave").addEventListener("click", () => {
-  const errores = [];
-
-  PROVEEDORES_UI.forEach((p) => {
-    const input = document.querySelector(`[data-input="${p.id}"]`);
-    const clave = (input?.value || "").trim();
-    if (!clave) return; // no tocó este proveedor: queda como estaba
-
-    if (clave.length < 20 || (p.prefijo && !clave.startsWith(p.prefijo))) {
-      errores.push(p.nombre);
-      return;
-    }
-    localStorage.setItem("boss_clave_" + p.id, clave);
-  });
-
-  if (errores.length) {
-    keyMsg.textContent = "Revisá la clave de: " + errores.join(", ") + ".";
-    return;
-  }
+  const resultados = PROVEEDORES_UI.map((p) => guardarProveedor(p.id));
+  if (resultados.includes(false)) return;
   if (!proveedoresConClave().length) {
-    keyMsg.textContent = "Cargá al menos una clave para usar el agente.";
+    keyMsg.textContent = "Cargá al menos una clave y dejá activado el proveedor.";
     return;
   }
-
-  localStorage.setItem("boss_proveedores", JSON.stringify(proveedoresConClave()));
   ocultarClave();
   revisarPantallas(sesionActual);
 });
@@ -542,12 +643,14 @@ const mosaicos = {
     html: () => {
       const pend = estado.tareas.filter((t) => !t.hecha).length;
       const hechas = estado.tareas.filter((t) => t.hecha).length;
-      const proveedores = esMaestra(sesionActual) ? "FreeLLMAPI (maestro)" : proveedoresConClave().join(", ") || "ninguno";
+      const proveedores = esMaestra(sesionActual)
+        ? "FreeLLMAPI (maestro)"
+        : proveedoresConClave().join(", ") || "ninguno";
       return `<ul class="sb-lista">
         <li>Tareas pendientes: <strong>${pend}</strong></li>
         <li>Tareas hechas: <strong>${hechas}</strong></li>
         <li>Notas guardadas: <strong>${estado.notas.length}</strong></li>
-        <li>Proveedores con clave: <strong>${escapeHtml(proveedores)}</strong></li>
+        <li>Proveedores activos: <strong>${escapeHtml(proveedores)}</strong></li>
       </ul>`;
     },
   },
@@ -826,10 +929,8 @@ async function sendMessage(texto) {
         conversacion_id: conversacionActual,
         proveedor: proveedorActivo(),
         clave: claveGroq(),
-        // Lista completa en orden de prioridad, para que el servidor pruebe la siguiente si una falla
-        proveedores: PROVEEDORES_UI
-          .filter((p) => claveDe(p.id))
-          .map((p) => ({ proveedor: p.id, clave: claveDe(p.id) })),
+        // Lista de proveedores activos en orden de prioridad: si uno falla, el servidor prueba el siguiente
+        proveedores: proveedoresConClave().map((id) => ({ proveedor: id, clave: claveDe(id) })),
         perfil: perfil
           ? {
               nombre_usuario: perfil.nombre_usuario,
@@ -870,6 +971,7 @@ async function sendMessage(texto) {
 
     if (err.status === 401 && !esMaestra(sesionActual)) {
       localStorage.removeItem("boss_clave_" + proveedorActivo());
+      sincronizarProveedores();
       mostrarClave(true);
     }
     if (err.status === 403) await sb.auth.signOut();
@@ -1060,10 +1162,16 @@ $("btnMic").addEventListener("click", () => {
 });
 
 // ============================================================
-// SESIÓN
+// SESIÓN: solo reacciona cuando cambia el usuario
+// (volver a la pestaña o renovar el token no reinicia nada)
 // ============================================================
+let ultimoUsuarioId = undefined;
+
 sb.auth.onAuthStateChange(async (_event, session) => {
   sesionActual = session;
+  const uid = session?.user?.id ?? null;
+  if (uid === ultimoUsuarioId) return;
+  ultimoUsuarioId = uid;
 
   if (!session) {
     perfil = null;
