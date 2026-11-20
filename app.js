@@ -393,7 +393,7 @@ const PASOS_PROVEEDOR = {
 const PREFIJO_PROVEEDOR = {
   groq: "gsk_",
   gemini: "AIza",
-  openai: "sk-",
+  openai: "",
   anthropic: "sk-ant-",
 };
 
@@ -414,7 +414,7 @@ $("guardarClave").addEventListener("click", () => {
   const clave = keyInput.value.trim();
   const prefijo = PREFIJO_PROVEEDOR[proveedor];
 
-  if (!clave.startsWith(prefijo) || clave.length < 20) {
+    if (!clave.startsWith(prefijo) || clave.length < 20) {
     keyMsg.textContent = `Esa clave no parece válida. Tiene que empezar con ${prefijo} y estar completa.`;
     return;
   }
