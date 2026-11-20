@@ -26,6 +26,9 @@ const GREETINGS = [
   "¡Hola! Me alegra que estés por acá. ¿Empezamos?",
 ];
 
+// Admins: no pasan por la pantalla de claves (usan FreeLLMAPI en el servidor)
+const ADMIN_EMAILS_FRONT = ["nicolas.resio.95@gmail.com"];
+
 // ============================================================
 // ESTADO GLOBAL
 // ============================================================
@@ -38,6 +41,8 @@ let avatarElegido = AVATARES[0];
 let tonoElegido = "cercano";
 let mosaicoActivo = null;
 let conversacionActual = null;
+let ultimoMensajeFueVoz = false;
+let reconocimiento = null;
 const historial = [];
 
 // ============================================================
@@ -58,16 +63,61 @@ function registrar(texto) {
   localStorage.setItem("boss_log", JSON.stringify(log.slice(-50)));
 }
 
-function proveedorActivo() {
-  return localStorage.getItem("boss_proveedor") || "groq";
+function esMaestra(session) {
+  const mail = (session?.user?.email || "").toLowerCase();
+  return ADMIN_EMAILS_FRONT.includes(mail);
 }
 
-function claveProveedor(proveedor = proveedorActivo()) {
-  return localStorage.getItem("boss_clave_" + proveedor) || "";
+// ============================================================
+// CLAVES DE PROVEEDORES: una por proveedor, en orden de prioridad
+// ============================================================
+const PROVEEDORES_UI = [
+  {
+    id: "groq",
+    nombre: "Groq",
+    gratis: true,
+    prefijo: "gsk_",
+    ayuda: 'Entrá a <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>, tocá <strong>Create API Key</strong> y copiala. Empieza con <code>gsk_</code>.',
+  },
+  {
+    id: "gemini",
+    nombre: "Gemini (Google)",
+    gratis: true,
+    prefijo: "",
+    ayuda: 'Entrá a <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>, tocá <strong>Create API key</strong> y copiala. Puede empezar con <code>AQ.</code> o <code>AIza</code>.',
+  },
+  {
+    id: "openai",
+    nombre: "OpenAI",
+    gratis: false,
+    prefijo: "sk-",
+    ayuda: 'Entrá a <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>, tocá <strong>Create new secret key</strong> y copiala. Empieza con <code>sk-</code>. Necesita crédito cargado.',
+  },
+  {
+    id: "anthropic",
+    nombre: "Claude (Anthropic)",
+    gratis: false,
+    prefijo: "sk-ant-",
+    ayuda: 'Entrá a <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>, tocá <strong>Create Key</strong> y copiala. Empieza con <code>sk-ant-</code>. Es de pago.',
+  },
+];
+
+function claveDe(id) {
+  return localStorage.getItem("boss_clave_" + id) || "";
+}
+
+// Proveedores con clave guardada, en el orden de la lista (Groq primero)
+function proveedoresConClave() {
+  return PROVEEDORES_UI.filter((p) => claveDe(p.id)).map((p) => p.id);
+}
+
+// Proveedor principal: el primero con clave. Lo usa el servidor como prioridad.
+function proveedorActivo() {
+  return proveedoresConClave()[0] || "groq";
 }
 
 function claveGroq() {
-  return claveProveedor(proveedorActivo());
+  return claveDe(proveedorActivo());
 }
 
 // ============================================================
@@ -174,184 +224,63 @@ $("cerrarSesion").addEventListener("click", async () => {
 });
 
 // ============================================================
-// TAREAS Y AVISOS
-// ============================================================
-function guardarEstado() {
-  localStorage.setItem("boss_estado", JSON.stringify(estado));
-}
-
-function itemTarea(t) {
-  const hoy = hoyISO();
-  const clase = t.fecha && t.fecha < hoy ? "tarea vencida" : "tarea";
-  const fecha = t.fecha ? `<small>${t.fecha}</small>` : "";
-  return `<li class="${clase}" data-id="${t.id}"><span class="tchk"></span><span class="ttxt">${escapeHtml(t.titulo)}</span>${fecha}</li>`;
-}
-
-function renderAvisos() {
-  const hoy = hoyISO();
-  const pendientes = estado.tareas
-    .filter((t) => !t.hecha)
-    .sort((a, b) => (a.fecha || "9999").localeCompare(b.fecha || "9999"));
-
-  const urgentes = pendientes.filter((t) => t.fecha && t.fecha <= hoy);
-  $("avisos").innerHTML = urgentes.length
-    ? `<div class="box"><strong>Avisos:</strong><ul>${urgentes
-        .map((t) => `<li>${escapeHtml(t.titulo)} · ${t.fecha} ${t.fecha < hoy ? "(vencida)" : "(hoy)"}</li>`)
-        .join("")}</ul></div>`
-    : "";
-
-  $("listaTareas").innerHTML = pendientes.length
-    ? pendientes.map(itemTarea).join("")
-    : `<li class="vacio">Sin tareas pendientes</li>`;
-
-  refrescarDetalle();
-}
-
-function marcarHecha(e) {
-  const li = e.target.closest("li[data-id]");
-  if (!li) return;
-  const tarea = estado.tareas.find((t) => t.id === Number(li.dataset.id));
-  if (tarea) {
-    tarea.hecha = true;
-    guardarEstado();
-    renderAvisos();
-  }
-}
-
-$("listaTareas").addEventListener("click", marcarHecha);
-
-// ============================================================
-// PANEL DERECHO: STUDIO Y WORK
-// ============================================================
-const mosaicos = {
-  vista: {
-    titulo: "Vista previa del proyecto",
-    html: () => {
-      const pend = estado.tareas.filter((t) => !t.hecha).length;
-      const hechas = estado.tareas.filter((t) => t.hecha).length;
-      const tieneClave = esMaestra(sesionActual) || Boolean(claveGroq());
-      return `<ul class="sb-lista">
-        <li>Tareas pendientes: <strong>${pend}</strong></li>
-        <li>Tareas hechas: <strong>${hechas}</strong></li>
-        <li>Notas guardadas: <strong>${estado.notas.length}</strong></li>
-        <li>Proveedor: <strong>${escapeHtml(esMaestra(sesionActual) ? "FreeLLMAPI (maestro)" : proveedorActivo())}</strong></li>
-        <li>Clave: <strong>${tieneClave ? "cargada" : "falta"}</strong></li>
-      </ul>`;
-    },
-  },
-  terminal: {
-    titulo: "Terminal",
-    html: () => {
-      const log = JSON.parse(localStorage.getItem("boss_log") || "[]");
-      return `<p class="nota">Registro de actividad. Acá no se ejecutan comandos.</p>
-        <pre class="log">${log.length ? escapeHtml(log.slice(-20).join("\n")) : "Sin actividad todavía."}</pre>`;
-    },
-  },
-  tareas: {
-    titulo: "Panel de tareas pendientes",
-    html: () => {
-      const pend = estado.tareas
-        .filter((t) => !t.hecha)
-        .sort((a, b) => (a.fecha || "9999").localeCompare(b.fecha || "9999"));
-      return pend.length
-        ? `<ul class="sb-lista">${pend.map(itemTarea).join("")}</ul>`
-        : `<p class="vacio">Sin tareas pendientes</p>`;
-    },
-  },
-  calendario: {
-    titulo: "Calendario",
-    html: () => {
-      const pend = estado.tareas.filter((t) => !t.hecha);
-      if (!pend.length) return `<p class="vacio">No hay tareas agendadas.</p>`;
-      const grupos = {};
-      pend.forEach((t) => {
-        const k = t.fecha || "Sin fecha";
-        if (!grupos[k]) grupos[k] = [];
-        grupos[k].push(t);
-      });
-      return Object.keys(grupos)
-        .sort((a, b) => (a === "Sin fecha" ? 1 : b === "Sin fecha" ? -1 : a.localeCompare(b)))
-        .map((k) => `<h4 class="dia">${k}</h4><ul class="sb-lista">${grupos[k].map(itemTarea).join("")}</ul>`)
-        .join("");
-    },
-  },
-  incidencias: {
-    titulo: "Resumen de incidencias",
-    html: () => {
-      const hoy = hoyISO();
-      const pend = estado.tareas.filter((t) => !t.hecha);
-      return `<ul class="sb-lista">
-        <li>Vencidas: <strong class="rojo">${pend.filter((t) => t.fecha && t.fecha < hoy).length}</strong></li>
-        <li>Para hoy: <strong>${pend.filter((t) => t.fecha === hoy).length}</strong></li>
-        <li>Prioridad alta: <strong>${pend.filter((t) => t.prioridad === "alta").length}</strong></li>
-        <li>Sin fecha: <strong>${pend.filter((t) => !t.fecha).length}</strong></li>
-      </ul>`;
-    },
-  },
-};
-
-function abrirMosaico(id) {
-  mosaicoActivo = id;
-  refrescarDetalle();
-  $("detalle").classList.remove("oculto");
-}
-
-function cerrarDetalle() {
-  mosaicoActivo = null;
-  $("detalle").classList.add("oculto");
-}
-
-function refrescarDetalle() {
-  if (!mosaicoActivo) return;
-  const m = mosaicos[mosaicoActivo];
-  $("detalleTitulo").textContent = m.titulo;
-  $("detalleBody").innerHTML = m.html();
-}
-
-document.querySelectorAll(".ptab").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".ptab").forEach((b) => b.classList.toggle("activo", b === btn));
-    const work = btn.dataset.area === "work";
-    $("areaStudio").classList.toggle("oculto", work);
-    $("areaWork").classList.toggle("oculto", !work);
-    cerrarDetalle();
-  });
-});
-
-document.querySelectorAll(".mosaico").forEach((btn) => {
-  btn.addEventListener("click", () => abrirMosaico(btn.dataset.mosaico));
-});
-
-$("detalleCerrar").addEventListener("click", cerrarDetalle);
-
-$("detalleBody").addEventListener("click", (e) => {
-  const btnCerrar = e.target.closest("#cerrarProyecto");
-  if (btnCerrar) {
-    cerrarProyecto(btnCerrar.dataset.id);
-    return;
-  }
-  marcarHecha(e);
-});
-
-// ============================================================
-// CLAVE DE PROVEEDOR
+// CLAVES: pantalla con una clave por proveedor
 // ============================================================
 const keyScreen = $("keyScreen");
-const keyInput = $("groqKeyInput");
 const keyMsg = $("keyMsg");
 
 function mostrarClave(puedeCancelar = false) {
-  keyInput.value = "";
-  keyMsg.textContent = "";
   $("cancelarClave").classList.toggle("oculto", !puedeCancelar);
+  keyMsg.textContent = "";
+  $("listaProveedores").innerHTML = PROVEEDORES_UI.map((p) => {
+    const guardada = claveDe(p.id);
+    return `
+      <div class="prov-item" data-prov="${p.id}">
+        <div class="prov-titulo">
+          <span>${p.nombre}${p.gratis ? " · gratis" : " · pago"}</span>
+          ${guardada ? '<span class="prov-ok">✓ cargada</span>' : ""}
+        </div>
+        <div class="prov-detalle">${p.ayuda}</div>
+        <input type="password" autocomplete="off" spellcheck="false"
+               placeholder="${p.prefijo ? "Empieza con " + p.prefijo : "Pegá tu clave"}"
+               data-input="${p.id}" value="">
+      </div>`;
+  }).join("");
   keyScreen.classList.remove("oculto");
-  $("proveedorSelect").value = proveedorActivo();
-  mostrarPasos(proveedorActivo());
 }
 
 function ocultarClave() {
   keyScreen.classList.add("oculto");
 }
+
+$("guardarClave").addEventListener("click", () => {
+  const errores = [];
+
+  PROVEEDORES_UI.forEach((p) => {
+    const input = document.querySelector(`[data-input="${p.id}"]`);
+    const clave = (input?.value || "").trim();
+    if (!clave) return; // no tocó este proveedor: queda como estaba
+
+    if (clave.length < 20 || (p.prefijo && !clave.startsWith(p.prefijo))) {
+      errores.push(p.nombre);
+      return;
+    }
+    localStorage.setItem("boss_clave_" + p.id, clave);
+  });
+
+  if (errores.length) {
+    keyMsg.textContent = "Revisá la clave de: " + errores.join(", ") + ".";
+    return;
+  }
+  if (!proveedoresConClave().length) {
+    keyMsg.textContent = "Cargá al menos una clave para usar el agente.";
+    return;
+  }
+
+  localStorage.setItem("boss_proveedores", JSON.stringify(proveedoresConClave()));
+  ocultarClave();
+  revisarPantallas(sesionActual);
+});
 
 $("cancelarClave").addEventListener("click", ocultarClave);
 
@@ -359,71 +288,6 @@ $("cambiarClave").addEventListener("click", () => {
   $("sidebar").classList.remove("abierto");
   $("velo").classList.add("oculto");
   mostrarClave(true);
-});
-
-const ADMIN_EMAILS_FRONT = ["nicolas.resio.95@gmail.com"];
-function esMaestra(session) {
-  const mail = (session?.user?.email || "").toLowerCase();
-  return ADMIN_EMAILS_FRONT.includes(mail);
-}
-
-const PASOS_PROVEEDOR = {
-  groq: [
-    'Entrá a <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>.',
-    "Tocá <strong>Create API Key</strong>, ponele un nombre y copiala.",
-    "Pegala abajo. Empieza con <code>gsk_</code>.",
-  ],
-  gemini: [
-    'Entrá a <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.',
-    "Tocá <strong>Create API key</strong> y copiala.",
-    "Pegala abajo. Empieza con <code>AIza</code>.",
-  ],
-  openai: [
-    'Entrá a <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>.',
-    "Tocá <strong>Create new secret key</strong> y copiala.",
-    "Pegala abajo. Empieza con <code>sk-</code>. Necesita crédito cargado.",
-  ],
-  anthropic: [
-    'Entrá a <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.',
-    "Tocá <strong>Create Key</strong> y copiala.",
-    "Pegala abajo. Empieza con <code>sk-ant-</code>. Es de pago.",
-  ],
-};
-
-const PREFIJO_PROVEEDOR = {
-  groq: "gsk_",
-  gemini: "AIza",
-  openai: "",
-  anthropic: "sk-ant-",
-};
-
-function mostrarPasos(proveedor) {
-  $("pasosProveedor").innerHTML = PASOS_PROVEEDOR[proveedor]
-    .map((p, i) => `<li><span>${i + 1}</span><div>${p}</div></li>`)
-    .join("");
-}
-
-$("proveedorSelect").addEventListener("change", (e) => {
-   localStorage.setItem("boss_proveedor", e.target.value);
-  mostrarPasos(e.target.value);
-  keyInput.value = "";
-  keyMsg.textContent = "";
-});
-
-$("guardarClave").addEventListener("click", () => {
-  const proveedor = $("proveedorSelect").value;
-  const clave = keyInput.value.trim();
-  const prefijo = PREFIJO_PROVEEDOR[proveedor];
-
-    if (!clave.startsWith(prefijo) || clave.length < 20) {
-    keyMsg.textContent = `Esa clave no parece válida. Tiene que empezar con ${prefijo} y estar completa.`;
-    return;
-  }
-
-  localStorage.setItem("boss_proveedor", proveedor);
-  localStorage.setItem("boss_clave_" + proveedor, clave);
-  ocultarClave();
-  revisarPantallas(sesionActual);
 });
 
 // ============================================================
@@ -590,7 +454,7 @@ $("btnPersonalizar").addEventListener("click", async () => {
 });
 
 // ============================================================
-// ORDEN DE PANTALLAS: login → clave → perfil
+// ORDEN DE PANTALLAS: login → claves → perfil
 // ============================================================
 async function revisarPantallas(session) {
   sesionActual = session;
@@ -605,15 +469,13 @@ async function revisarPantallas(session) {
   loginScreen.classList.add("oculto");
   setMsg("");
 
-  if (esMaestra(session)) {
-    ocultarClave();
-  } else if (!claveGroq()) {
+  // El admin no necesita claves: usa FreeLLMAPI desde el servidor
+  if (!esMaestra(session) && proveedoresConClave().length === 0) {
     mostrarClave(false);
     perfilScreen.classList.add("oculto");
     return;
-  } else {
-    ocultarClave();
   }
+  ocultarClave();
 
   const existente = await cargarPerfil();
   if (existente) {
@@ -623,6 +485,165 @@ async function revisarPantallas(session) {
     abrirFormPerfil(null);
   }
 }
+
+// ============================================================
+// TAREAS Y AVISOS
+// ============================================================
+function guardarEstado() {
+  localStorage.setItem("boss_estado", JSON.stringify(estado));
+}
+
+function itemTarea(t) {
+  const hoy = hoyISO();
+  const clase = t.fecha && t.fecha < hoy ? "tarea vencida" : "tarea";
+  const fecha = t.fecha ? `<small>${t.fecha}</small>` : "";
+  return `<li class="${clase}" data-id="${t.id}"><span class="tchk"></span><span class="ttxt">${escapeHtml(t.titulo)}</span>${fecha}</li>`;
+}
+
+function renderAvisos() {
+  const hoy = hoyISO();
+  const pendientes = estado.tareas
+    .filter((t) => !t.hecha)
+    .sort((a, b) => (a.fecha || "9999").localeCompare(b.fecha || "9999"));
+
+  const urgentes = pendientes.filter((t) => t.fecha && t.fecha <= hoy);
+  $("avisos").innerHTML = urgentes.length
+    ? `<div class="box"><strong>Avisos:</strong><ul>${urgentes
+        .map((t) => `<li>${escapeHtml(t.titulo)} · ${t.fecha} ${t.fecha < hoy ? "(vencida)" : "(hoy)"}</li>`)
+        .join("")}</ul></div>`
+    : "";
+
+  $("listaTareas").innerHTML = pendientes.length
+    ? pendientes.map(itemTarea).join("")
+    : `<li class="vacio">Sin tareas pendientes</li>`;
+
+  refrescarDetalle();
+}
+
+function marcarHecha(e) {
+  const li = e.target.closest("li[data-id]");
+  if (!li) return;
+  const tarea = estado.tareas.find((t) => t.id === Number(li.dataset.id));
+  if (tarea) {
+    tarea.hecha = true;
+    guardarEstado();
+    renderAvisos();
+  }
+}
+
+$("listaTareas").addEventListener("click", marcarHecha);
+
+// ============================================================
+// PANEL DERECHO: STUDIO Y WORK
+// ============================================================
+const mosaicos = {
+  vista: {
+    titulo: "Vista previa del proyecto",
+    html: () => {
+      const pend = estado.tareas.filter((t) => !t.hecha).length;
+      const hechas = estado.tareas.filter((t) => t.hecha).length;
+      const proveedores = esMaestra(sesionActual) ? "FreeLLMAPI (maestro)" : proveedoresConClave().join(", ") || "ninguno";
+      return `<ul class="sb-lista">
+        <li>Tareas pendientes: <strong>${pend}</strong></li>
+        <li>Tareas hechas: <strong>${hechas}</strong></li>
+        <li>Notas guardadas: <strong>${estado.notas.length}</strong></li>
+        <li>Proveedores con clave: <strong>${escapeHtml(proveedores)}</strong></li>
+      </ul>`;
+    },
+  },
+  terminal: {
+    titulo: "Terminal",
+    html: () => {
+      const log = JSON.parse(localStorage.getItem("boss_log") || "[]");
+      return `<p class="nota">Registro de actividad. Acá no se ejecutan comandos.</p>
+        <pre class="log">${log.length ? escapeHtml(log.slice(-20).join("\n")) : "Sin actividad todavía."}</pre>`;
+    },
+  },
+  tareas: {
+    titulo: "Panel de tareas pendientes",
+    html: () => {
+      const pend = estado.tareas
+        .filter((t) => !t.hecha)
+        .sort((a, b) => (a.fecha || "9999").localeCompare(b.fecha || "9999"));
+      return pend.length
+        ? `<ul class="sb-lista">${pend.map(itemTarea).join("")}</ul>`
+        : `<p class="vacio">Sin tareas pendientes</p>`;
+    },
+  },
+  calendario: {
+    titulo: "Calendario",
+    html: () => {
+      const pend = estado.tareas.filter((t) => !t.hecha);
+      if (!pend.length) return `<p class="vacio">No hay tareas agendadas.</p>`;
+      const grupos = {};
+      pend.forEach((t) => {
+        const k = t.fecha || "Sin fecha";
+        if (!grupos[k]) grupos[k] = [];
+        grupos[k].push(t);
+      });
+      return Object.keys(grupos)
+        .sort((a, b) => (a === "Sin fecha" ? 1 : b === "Sin fecha" ? -1 : a.localeCompare(b)))
+        .map((k) => `<h4 class="dia">${k}</h4><ul class="sb-lista">${grupos[k].map(itemTarea).join("")}</ul>`)
+        .join("");
+    },
+  },
+  incidencias: {
+    titulo: "Resumen de incidencias",
+    html: () => {
+      const hoy = hoyISO();
+      const pend = estado.tareas.filter((t) => !t.hecha);
+      return `<ul class="sb-lista">
+        <li>Vencidas: <strong class="rojo">${pend.filter((t) => t.fecha && t.fecha < hoy).length}</strong></li>
+        <li>Para hoy: <strong>${pend.filter((t) => t.fecha === hoy).length}</strong></li>
+        <li>Prioridad alta: <strong>${pend.filter((t) => t.prioridad === "alta").length}</strong></li>
+        <li>Sin fecha: <strong>${pend.filter((t) => !t.fecha).length}</strong></li>
+      </ul>`;
+    },
+  },
+};
+
+function abrirMosaico(id) {
+  mosaicoActivo = id;
+  refrescarDetalle();
+  $("detalle").classList.remove("oculto");
+}
+
+function cerrarDetalle() {
+  mosaicoActivo = null;
+  $("detalle").classList.add("oculto");
+}
+
+function refrescarDetalle() {
+  if (!mosaicoActivo) return;
+  const m = mosaicos[mosaicoActivo];
+  $("detalleTitulo").textContent = m.titulo;
+  $("detalleBody").innerHTML = m.html();
+}
+
+document.querySelectorAll(".ptab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".ptab").forEach((b) => b.classList.toggle("activo", b === btn));
+    const work = btn.dataset.area === "work";
+    $("areaStudio").classList.toggle("oculto", work);
+    $("areaWork").classList.toggle("oculto", !work);
+    cerrarDetalle();
+  });
+});
+
+document.querySelectorAll(".mosaico").forEach((btn) => {
+  btn.addEventListener("click", () => abrirMosaico(btn.dataset.mosaico));
+});
+
+$("detalleCerrar").addEventListener("click", cerrarDetalle);
+
+$("detalleBody").addEventListener("click", (e) => {
+  const btnCerrar = e.target.closest("#cerrarProyecto");
+  if (btnCerrar) {
+    cerrarProyecto(btnCerrar.dataset.id);
+    return;
+  }
+  marcarHecha(e);
+});
 
 // ============================================================
 // CHAT
@@ -671,16 +692,16 @@ function addTyping() {
 
 function mensajeDeError(err) {
   const prov = proveedorActivo();
-  if (err.status === 401) return `Tu API key de ${prov} no es válida o venció. Pegá una nueva.`;
+  if (err.status === 401) return `Tu clave de ${prov} no es válida o venció. Revisala o pegá otra.`;
   if (err.status === 403) return "Tu sesión venció. Volvé a entrar.";
-  if (err.status === 429) return `Se agotó tu cuota en ${prov}. Esperá unos minutos o revisá tu plan.`;
+  if (err.status === 429) return `Se agotó tu cuota en ${prov}. Esperá unos minutos o cargá otra clave.`;
   if (err.status === 404) return "El modelo no está disponible. Revisá el nombre del modelo en chat.js.";
+  if (err.status === 504) return "El modelo tardó demasiado. Tocá Enviar de nuevo.";
   if (err.status >= 500) return "El servidor tuvo un problema. Intentá de nuevo en unos segundos.";
   if (!err.status) return "No hay conexión con el servidor. Revisá tu internet y probá de nuevo.";
   return "No pude responder: " + err.message;
 }
 
-// ---------- Lista de chats ----------
 function marcarChatActivo() {
   document.querySelectorAll(".chat-item[data-id]").forEach((li) => {
     li.classList.toggle("activo", li.dataset.id === conversacionActual);
@@ -805,6 +826,10 @@ async function sendMessage(texto) {
         conversacion_id: conversacionActual,
         proveedor: proveedorActivo(),
         clave: claveGroq(),
+        // Lista completa en orden de prioridad, para que el servidor pruebe la siguiente si una falla
+        proveedores: PROVEEDORES_UI
+          .filter((p) => claveDe(p.id))
+          .map((p) => ({ proveedor: p.id, clave: claveDe(p.id) })),
         perfil: perfil
           ? {
               nombre_usuario: perfil.nombre_usuario,
@@ -823,7 +848,7 @@ async function sendMessage(texto) {
     }
 
     addBot(json.reply);
-        if (ultimoMensajeFueVoz) hablar(json.reply);
+    if (ultimoMensajeFueVoz) hablar(json.reply);
     ultimoMensajeFueVoz = false;
     historial.push({ role: "model", text: json.reply });
 
@@ -857,7 +882,7 @@ async function sendMessage(texto) {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (!esMaestra(sesionActual) && !claveGroq()) {
+  if (!esMaestra(sesionActual) && proveedoresConClave().length === 0) {
     mostrarClave(false);
     return;
   }
@@ -879,6 +904,8 @@ input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 160) + "px";
 });
+
+$("btnNuevo").addEventListener("click", nuevoChat);
 
 // ============================================================
 // PROYECTOS
@@ -979,13 +1006,12 @@ $("listaProyectos").addEventListener("click", async (e) => {
   const item = e.target.closest("[data-proyecto]");
   if (item) await mostrarDetalleProyecto(item.dataset.proyecto);
 });
+
 // ============================================================
 // VOZ: dictar (voz a texto) y responder en voz alta (texto a voz)
 // ============================================================
 const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 const hayTTS = "speechSynthesis" in window;
-let ultimoMensajeFueVoz = false;
-let reconocimiento = null;
 
 function hablar(texto) {
   if (!hayTTS) return;
@@ -1002,7 +1028,6 @@ $("btnMic").addEventListener("click", () => {
     return;
   }
 
-  // Si ya está escuchando, lo detiene
   if (reconocimiento) {
     reconocimiento.stop();
     return;
@@ -1016,13 +1041,12 @@ $("btnMic").addEventListener("click", () => {
   $("btnMic").classList.add("escuchando");
 
   reconocimiento.onresult = (e) => {
-    const texto = e.results[0][0].transcript;
-    input.value = texto;
+    input.value = e.results[0][0].transcript;
     ultimoMensajeFueVoz = true;
     form.requestSubmit();
   };
 
-   reconocimiento.onerror = (e) => {
+  reconocimiento.onerror = (e) => {
     keyMsg.textContent = "Error de voz: " + e.error;
     console.log("Error de reconocimiento:", e.error);
   };
@@ -1034,10 +1058,6 @@ $("btnMic").addEventListener("click", () => {
 
   reconocimiento.start();
 });
-// ============================================================
-// NAVEGACIÓN
-// ============================================================
-$("btnNuevo").addEventListener("click", nuevoChat);
 
 // ============================================================
 // SESIÓN
@@ -1156,6 +1176,13 @@ window.addEventListener("popstate", () => {
   cerrarPaneles(false);
 });
 
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    document.querySelectorAll(".sidebar, .panel").forEach((p) => p.classList.remove("abierto"));
+    velo.classList.add("oculto");
+  }
+});
+
 // ============================================================
 // CAMBIAR CONTRASEÑA DESDE LA CUENTA
 // ============================================================
@@ -1178,7 +1205,7 @@ function ocultarCambioPass() {
 
 $("btnCambiarPass").addEventListener("click", () => {
   $("sidebar").classList.remove("abierto");
-  $("velo").classList.add("oculto");
+  velo.classList.add("oculto");
   mostrarCambioPass();
 });
 
@@ -1215,13 +1242,6 @@ $("guardarPass").addEventListener("click", async () => {
     passMsg.classList.remove("ok");
     ocultarCambioPass();
   }, 1500);
-});
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    document.querySelectorAll(".sidebar, .panel").forEach((p) => p.classList.remove("abierto"));
-    $("velo").classList.add("oculto");
-  }
 });
 
 // ============================================================

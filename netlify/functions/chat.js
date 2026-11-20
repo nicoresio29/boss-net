@@ -2,6 +2,7 @@ const TZ = "America/Argentina/Buenos_Aires";
 const SUPABASE_URL = "https://wplaadbewlbyeafohfjm.supabase.co";
 const SUPABASE_KEY = "sb_publishable_jGbMu5U9D00_Oe9ATrzvvQ_1a2kYNqj"; // publishable: segura en el servidor
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TIMEOUT_MS = 20000;
 
 // ---------- Proveedores ----------
 const PROVEEDORES = {
@@ -10,7 +11,6 @@ const PROVEEDORES = {
     url: process.env.FREELLMAPI_URL || "http://127.0.0.1:31415/v1/chat/completions",
     modelo: "auto",
     formato: "openai",
-    claveEnv: "FREELLMAPI_KEY",
   },
   groq: {
     tipo: "usuario",
@@ -38,12 +38,22 @@ const PROVEEDORES = {
   },
 };
 
+// ---------- Utilidades ----------
+function respond(statusCode, body) {
+  return { statusCode, body: JSON.stringify(body) };
+}
+
 function hoyISO() {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(new Date());
 }
 
-function respond(statusCode, body) {
-  return { statusCode, body: JSON.stringify(body) };
+function ahoraTexto() {
+  return new Intl.DateTimeFormat("es-AR", {
+    timeZone: TZ,
+    dateStyle: "full",
+    timeStyle: "short",
+    hour12: false,
+  }).format(new Date());
 }
 
 function esAdmin(usuario) {
@@ -52,6 +62,12 @@ function esAdmin(usuario) {
     .map((m) => m.trim().toLowerCase())
     .filter(Boolean);
   return lista.includes((usuario.email || "").toLowerCase());
+}
+
+// Errores que justifican probar con el siguiente proveedor
+function esRecuperable(err) {
+  if (!err.status) return true; // red, timeout o servicio caído
+  return [401, 403, 404, 429].includes(err.status) || err.status >= 500;
 }
 
 // ---------- Supabase ----------
@@ -266,7 +282,7 @@ async function ejecutarHerramienta(nombre, argsInput, ctx) {
 // ---------- Prompt del sistema ----------
 function construirSistema(estado, memorias, perfil) {
   const hoy = hoyISO();
-const ahora = ahoraTexto();
+  const ahora = ahoraTexto();
   const nombreAgente = perfil?.nombre_agente || "boss";
   const nombreUsuario = perfil?.nombre_usuario || "vos";
   const tonos = {
@@ -317,12 +333,7 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
   if (prov.formato === "anthropic") {
     const system = messages.find((m) => m.role === "system")?.content || "";
     const resto = messages.filter((m) => m.role !== "system");
-    const body = {
-      model: prov.modelo,
-      max_tokens: 1024,
-      system,
-      messages: resto,
-    };
+    const body = { model: prov.modelo, max_tokens: 1024, system, messages: resto };
     if (permitirHerramientas) body.tools = ANTHROPIC_TOOLS;
 
     const res = await fetch(prov.url, {
@@ -333,9 +344,8 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(data.error?.message || "Error de Anthropic"), { status: res.status });
 
@@ -356,6 +366,7 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
     return { texto: texto || "No obtuve respuesta.", herramientas: null };
   }
 
+  // Formato OpenAI: Groq, Gemini, OpenAI y FreeLLMAPI
   const body = { model: prov.modelo, messages };
   if (permitirHerramientas) body.tools = TOOLS;
 
@@ -366,9 +377,8 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
       Authorization: `Bearer ${prov.key}`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20000),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
 
@@ -391,75 +401,22 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
   return { texto: mensaje.content || "No obtuve respuesta.", herramientas: null };
 }
 
-// Versión con streaming: va leyendo los pedazos de texto a medida que llegan.
-// Solo para respuestas de texto (sin herramientas). Formato OpenAI (Groq, Gemini, FreeLLMAPI).
-async function llamarProveedorStream(prov, messages, onPedazo) {
-  const res = await fetch(prov.url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${prov.key}`,
-    },
-    body: JSON.stringify({ model: prov.modelo, messages, stream: true }),
-    signal: AbortSignal.timeout(20000),
-  });
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
-  }
-
-  const lector = res.body.getReader();
-  const decodificador = new TextDecoder();
-  let buffer = "";
-  let textoCompleto = "";
-
-  while (true) {
-    const { value, done } = await lector.read();
-    if (done) break;
-
-    buffer += decodificador.decode(value, { stream: true });
-    const lineas = buffer.split("\n");
-    buffer = lineas.pop(); // lo que queda incompleto se guarda para la próxima vuelta
-
-    for (const linea of lineas) {
-      if (!linea.startsWith("data: ")) continue;
-      const dato = linea.slice(6).trim();
-      if (dato === "[DONE]") continue;
-
-      try {
-        const pedazo = JSON.parse(dato).choices?.[0]?.delta?.content || "";
-        if (pedazo) {
-          textoCompleto += pedazo;
-          onPedazo(pedazo);
-        }
-      } catch {
-        // línea incompleta o vacía: se ignora
-      }
-    }
-  }
-
-  return textoCompleto;
-}
-
-// ---------- Bucle del agente ----------
-async function correrAgente(messages, prov, ctx) {
+// ---------- Bucle del agente con un solo proveedor ----------
+async function correrConProveedor(messages, prov, ctx) {
   const MAX_PASOS = 8;
 
   for (let paso = 0; paso < MAX_PASOS; paso++) {
     const { texto, herramientas } = await llamarProveedor(prov, messages);
     if (texto !== null) return texto;
 
+    ctx.usoHerramientas = true;
+
     if (herramientas.formato === "anthropic") {
       messages.push({ role: "assistant", content: herramientas.rawContent });
       const resultados = [];
       for (const llamada of herramientas.calls) {
         const res = await ejecutarHerramienta(llamada.name, llamada.args, ctx);
-        resultados.push({
-          type: "tool_result",
-          tool_use_id: llamada.id,
-          content: JSON.stringify(res),
-        });
+        resultados.push({ type: "tool_result", tool_use_id: llamada.id, content: JSON.stringify(res) });
       }
       messages.push({ role: "user", content: resultados });
     } else {
@@ -482,6 +439,54 @@ async function correrAgente(messages, prov, ctx) {
   return texto || "Guardé lo que pude, pero no llegué a resumirlo. Decime qué querés ver primero.";
 }
 
+// ---------- Respaldo entre proveedores ----------
+// Prueba cada proveedor en orden. Si uno falla con un error recuperable, pasa al siguiente.
+// Si el proveedor ya ejecutó herramientas, no se repite con otro para no duplicar datos.
+async function correrAgente(messagesBase, provs, ctx) {
+  let ultimoError = null;
+
+  for (const prov of provs) {
+    ctx.usoHerramientas = false;
+    try {
+      console.log(`Probando ${prov.nombre}`);
+      return await correrConProveedor([...messagesBase], prov, ctx);
+    } catch (err) {
+      ultimoError = err;
+      console.log(`Falló ${prov.nombre}: ${err.message}`);
+      if (ctx.usoHerramientas || !esRecuperable(err)) throw err;
+    }
+  }
+
+  throw ultimoError || new Error("No hay proveedores disponibles");
+}
+
+// ---------- Armado de la lista de proveedores ----------
+function armarProveedores(usuario, body) {
+  if (esAdmin(usuario)) {
+    const key = process.env.FREELLMAPI_KEY;
+    if (!key) return { error: "Falta FREELLMAPI_KEY en el .env", status: 500 };
+    return { lista: [{ ...PROVEEDORES.freellmapi, nombre: "FreeLLMAPI", key }] };
+  }
+
+  const pedidos = Array.isArray(body.proveedores) && body.proveedores.length
+    ? body.proveedores
+    : [{ proveedor: body.proveedor || "groq", clave: body.clave }];
+
+  const lista = [];
+  const vistos = new Set();
+  for (const item of pedidos) {
+    const id = String(item?.proveedor || "").toLowerCase();
+    const config = PROVEEDORES[id];
+    const key = String(item?.clave || "").trim();
+    if (!config || config.tipo !== "usuario" || !key || vistos.has(id)) continue;
+    vistos.add(id);
+    lista.push({ ...config, nombre: id, key });
+  }
+
+  if (!lista.length) return { error: "Falta tu clave de algún proveedor", status: 401 };
+  return { lista };
+}
+
 // ---------- Handler ----------
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") return respond(405, { error: "Método no permitido" });
@@ -502,22 +507,8 @@ exports.handler = async (event) => {
   const mensaje = String(body.mensaje || "").trim();
   if (!mensaje) return respond(400, { error: "Mensaje vacío" });
 
-  const proveedorElegido = String(body.proveedor || "groq").toLowerCase();
-  let prov;
-
-  if (esAdmin(usuario)) {
-    const claveMaestra = process.env.FREELLMAPI_KEY;
-    if (!claveMaestra) return respond(500, { error: "Falta FREELLMAPI_KEY en el .env" });
-    prov = { ...PROVEEDORES.freellmapi, nombre: "FreeLLMAPI", key: claveMaestra };
-  } else {
-    const config = PROVEEDORES[proveedorElegido];
-    if (!config || config.tipo !== "usuario") {
-      return respond(400, { error: "Proveedor no disponible" });
-    }
-    const claveUsuario = String(body.clave || "").trim();
-    if (!claveUsuario) return respond(401, { error: `Falta tu clave de ${proveedorElegido}` });
-    prov = { ...config, nombre: proveedorElegido, key: claveUsuario };
-  }
+  const proveedores = armarProveedores(usuario, body);
+  if (proveedores.error) return respond(proveedores.status, { error: proveedores.error });
 
   const estado = normalizarEstado(body.estado);
   let conversacionId = UUID_RE.test(body.conversacion_id || "") ? body.conversacion_id : null;
@@ -536,11 +527,12 @@ exports.handler = async (event) => {
       { role: "user", content: mensaje },
     ];
 
-    const reply = await correrAgente(messages, prov, {
+    const reply = await correrAgente(messages, proveedores.lista, {
       estado,
       token,
       userId: usuario.id,
       memorias,
+      usoHerramientas: false,
     });
 
     await guardarMensaje(token, usuario.id, conversacionId, "assistant", reply);
@@ -548,16 +540,11 @@ exports.handler = async (event) => {
 
     return respond(200, { reply, estado, conversacion_id: conversacionId });
   } catch (err) {
-    console.log(`Error de ${prov.nombre}:`, err.message);
+    console.log("Error del agente:", err.message);
+    if (err.name === "TimeoutError" || err.name === "AbortError") {
+      return respond(504, { error: "El modelo tardó demasiado. Probá de nuevo." });
+    }
     if (err.status) return respond(err.status, { error: err.message });
     return respond(500, { error: "No se pudo completar la respuesta" });
   }
 };
-function ahoraTexto() {
-  return new Intl.DateTimeFormat("es-AR", {
-    timeZone: TZ,
-    dateStyle: "full",
-    timeStyle: "short",
-    hour12: false,
-  }).format(new Date());
-}

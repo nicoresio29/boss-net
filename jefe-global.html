@@ -68,7 +68,7 @@
     </div>
   </div>
 
-  <!-- ===== Clave de API ===== -->
+    <!-- ===== Claves de API: una por proveedor ===== -->
   <div id="keyScreen" class="lg-screen oculto">
     <div class="lg-wrap">
       <div class="lg-brand">
@@ -77,28 +77,17 @@
       </div>
 
       <div class="lg-card">
-        <h2>Elegí tu proveedor</h2>
-        <p class="lg-sub">Pegá tu clave. Se guarda solo en este navegador.</p>
+        <h2>Cargá tus claves</h2>
+        <p class="lg-sub">Groq se usa primero. Si se te acaba la cuota, pasa a Gemini, y así sucesivamente. Se guardan solo en este navegador.</p>
 
-        <label class="campo-label" for="proveedorSelect">Proveedor</label>
-        <select id="proveedorSelect" name="proveedor" class="campo-input">
-          <option value="groq">Groq (gratis)</option>
-          <option value="gemini">Gemini de Google (gratis)</option>
-          <option value="openai">OpenAI (pago)</option>
-          <option value="anthropic">Claude de Anthropic (pago)</option>
-        </select>
+        <div id="listaProveedores" class="lista-proveedores"></div>
 
-        <ol class="pasos" id="pasosProveedor"></ol>
-
-        <label class="campo-label" for="groqKeyInput">Clave</label>
-        <input id="groqKeyInput" name="apiKey" class="campo-input" type="password" placeholder="Pegá tu clave aquí" autocomplete="off" spellcheck="false">
-        <button id="guardarClave" type="button" class="lg-primary">Guardar y empezar</button>
+        <button id="guardarClave" type="button" class="lg-primary">Guardar claves</button>
         <button id="cancelarClave" type="button" class="lg-link">Cancelar</button>
         <p id="keyMsg" class="lg-msg" role="status" aria-live="polite"></p>
       </div>
     </div>
   </div>
-
   <!-- ===== Perfil ===== -->
   <div id="perfilScreen" class="lg-screen oculto">
     <div class="lg-wrap">

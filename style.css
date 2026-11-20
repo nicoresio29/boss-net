@@ -1325,3 +1325,38 @@ body.redimensionando {
   color: var(--danger);
   animation: pulso 1s infinite;
 }
+/* ---------- Proveedores ---------- */
+.lista-proveedores {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.prov-item {
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  padding: 0.7rem 0.8rem;
+  background: rgba(255, 255, 255, 0.5);
+}
+.prov-titulo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 0.3rem;
+}
+.prov-detalle {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+.prov-detalle a { font-weight: 600; }
+.prov-item input {
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  font-size: 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(154, 134, 114, 0.25);
+  background: rgba(255, 255, 255, 0.85);
+}
+.prov-item .prov-ok { color: var(--ok); font-size: 0.78rem; }
