@@ -404,6 +404,7 @@ function mostrarPasos(proveedor) {
 }
 
 $("proveedorSelect").addEventListener("change", (e) => {
+   localStorage.setItem("boss_proveedor", e.target.value);
   mostrarPasos(e.target.value);
   keyInput.value = "";
   keyMsg.textContent = "";
