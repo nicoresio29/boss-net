@@ -333,7 +333,9 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
     });
+
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error(data.error?.message || "Error de Anthropic"), { status: res.status });
 
@@ -345,11 +347,7 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
         herramientas: {
           formato: "anthropic",
           rawContent: bloques,
-          calls: toolUses.map((b) => ({
-            id: b.id,
-            name: b.name,
-            args: b.input || {},
-          })),
+          calls: toolUses.map((b) => ({ id: b.id, name: b.name, args: b.input || {} })),
         },
       };
     }
@@ -368,7 +366,9 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
       Authorization: `Bearer ${prov.key}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
   });
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
 
@@ -389,6 +389,57 @@ async function llamarProveedor(prov, messages, { permitirHerramientas = true } =
     };
   }
   return { texto: mensaje.content || "No obtuve respuesta.", herramientas: null };
+}
+
+// Versión con streaming: va leyendo los pedazos de texto a medida que llegan.
+// Solo para respuestas de texto (sin herramientas). Formato OpenAI (Groq, Gemini, FreeLLMAPI).
+async function llamarProveedorStream(prov, messages, onPedazo) {
+  const res = await fetch(prov.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${prov.key}`,
+    },
+    body: JSON.stringify({ model: prov.modelo, messages, stream: true }),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(data.error?.message || `Error de ${prov.nombre}`), { status: res.status });
+  }
+
+  const lector = res.body.getReader();
+  const decodificador = new TextDecoder();
+  let buffer = "";
+  let textoCompleto = "";
+
+  while (true) {
+    const { value, done } = await lector.read();
+    if (done) break;
+
+    buffer += decodificador.decode(value, { stream: true });
+    const lineas = buffer.split("\n");
+    buffer = lineas.pop(); // lo que queda incompleto se guarda para la próxima vuelta
+
+    for (const linea of lineas) {
+      if (!linea.startsWith("data: ")) continue;
+      const dato = linea.slice(6).trim();
+      if (dato === "[DONE]") continue;
+
+      try {
+        const pedazo = JSON.parse(dato).choices?.[0]?.delta?.content || "";
+        if (pedazo) {
+          textoCompleto += pedazo;
+          onPedazo(pedazo);
+        }
+      } catch {
+        // línea incompleta o vacía: se ignora
+      }
+    }
+  }
+
+  return textoCompleto;
 }
 
 // ---------- Bucle del agente ----------
